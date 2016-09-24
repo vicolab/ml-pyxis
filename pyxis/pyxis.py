@@ -4,6 +4,8 @@
 # pyxis.py: Tool for reading and writing datasets of tensors in a Lightning
 #           Memory-Mapped Database (LMDB).
 #
+from __future__ import division
+
 import lmdb
 import numpy as np
 
@@ -68,6 +70,7 @@ class Reader(object):
     dirpath : string
         Path to the directory containing the LMDB.
     """
+
     def __init__(self, dirpath):
         # Open LMDB environment in read-only mode
         self._lmdb_env = lmdb.open(dirpath, readonly=True, max_dbs=NB_DBS)
@@ -100,6 +103,104 @@ class Reader(object):
         # Target
         byte_obj = self._txn.get(TARGET_SHAPE, db=self.metadata_db)
         self.target_shape = tuple(np.fromstring(byte_obj, dtype=np.uint8))
+
+    def batch_generator(self, batch_size, shuffle=False, endless_mode=True):
+        """Return a batch of samples from `input_db` and `target_db`.
+
+        Parameters
+        ----------
+        batch_size : int
+            Number of samples that should make up a batch.
+        shuffle : boolean
+            When set to `True` the samples are shuffled before being split
+            up into batches, otherwise the samples er kept in the order they
+            were written. Default is `False`.
+        endless_mode : boolean
+            Indicates whether or not the batch generator should yield the whole
+            dataset only once (`False`) or until the user stops using the
+            function (`True`). `Default is `True`.
+
+        Returns
+        -------
+        (numpy.array, numpy.array)
+            The batch generator returns two values packed in a tuple. The
+            first is a batch of inputs and the second is a batch of targets.
+        """
+        # Keep track of whether or not this is the end of the dataset
+        self.end_of_dataset = False
+
+        # Generate indices for the data
+        idxs = np.arange(self.nb_samples, dtype=np.uint64)
+
+        # Compute how many calls it will take to go through the whole dataset
+        nb_calls = self.nb_samples / batch_size
+
+        while True:
+            # Shuffle indices
+            if shuffle:
+                np.random.shuffle(idxs)
+
+            # Generate batches
+            for call in np.arange(np.ceil(nb_calls)):
+                # Check and see if we have enough data to fill a whole batch
+                if call < np.floor(nb_calls):  # Whole batch
+                    size = batch_size
+                    self.end_of_dataset = False
+                else:                          # Remainder
+                    size = self.nb_samples % batch_size
+                    self.end_of_dataset = True
+
+                # Check and see if we have gone through the dataset
+                if call + 1 == np.ceil(nb_calls):
+                    self.end_of_dataset = True
+
+                # Create a batch
+                xs = np.zeros((size,) + self.input_shape,
+                              dtype=self.input_dtype)
+                ys = np.zeros((size,) + self.target_shape,
+                              dtype=self.target_dtype)
+
+                batch_idxs = np.arange(size) + batch_size * call
+                batch_idxs = batch_idxs.astype(np.int)
+
+                for i, v in enumerate(batch_idxs):
+                    xs[i] = self.get_input(idxs[v])
+                    ys[i] = self.get_target(idxs[v])
+
+                yield xs, ys
+
+            if not endless_mode:
+                break
+
+    def stochastic_batch_generator(self, batch_size):
+        """Return a batch of samples uniformly sampled from `input_db` and
+        `target_db`.
+
+        Parameters
+        ----------
+        batch_size : int
+            Number of samples that should make up a batch.
+
+        Returns
+        -------
+        (numpy.array, numpy.array)
+            The batch generator returns two values packed in a tuple. The
+            first is a batch of inputs and the second is a batch of targets.
+        """
+        xs = np.zeros((batch_size,) + self.input_shape, dtype=self.input_dtype)
+        ys = np.zeros((batch_size,) + self.target_shape,
+                      dtype=self.target_dtype)
+
+        while True:
+            # Randomly sample indices
+            batch_idxs = np.random.randint(self.nb_samples, size=batch_size,
+                                           dtype=np.uint64)
+
+            for i, v in enumerate(batch_idxs):
+                xs[i] = self.get_input(v)
+                ys[i] = self.get_target(v)
+
+            yield xs, ys
 
     def get_sample(self, i):
         """Return the ith sample from `input_db` and `target_db`.
@@ -194,6 +295,7 @@ class Writer(object):
     map_size_limit : int
         Map size for LMDB in MB. Default is `1000` MB.
     """
+
     def __init__(self, dirpath, input_shape, target_shape=(),
                  input_dtype=np.uint8, target_dtype=np.uint8, ram_gb_limit=2,
                  map_size_limit=1000):
@@ -228,10 +330,12 @@ class Writer(object):
             # Data shapes
             # Input
             txn.put(INPUT_SHAPE, self._pack_array(np.array(input_shape),
-                is_data=False), db=self.metadata_db)
+                                                  is_data=False),
+                    db=self.metadata_db)
             # Target
             txn.put(TARGET_SHAPE, self._pack_array(np.array(target_shape),
-                is_data=False), db=self.metadata_db)
+                                                   is_data=False),
+                    db=self.metadata_db)
 
     def put_samples(self, inputs, targets):
         """Puts the inputs and targets into the `input_db` and `target_db`,
