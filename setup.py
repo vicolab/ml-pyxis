@@ -5,7 +5,7 @@ from setuptools import (find_packages, setup)
 
 
 path = os.path.abspath(os.path.dirname(__file__))
-readme = open(os.path.join(path, 'README.md')).read()
+readme = open(os.path.join(path, 'README.rst')).read()
 
 try:
     with open(os.path.join(path, 'pyxis', '__init__.py'), 'r') as f:

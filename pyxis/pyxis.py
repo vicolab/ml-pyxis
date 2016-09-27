@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
 # pyxis.py: Tool for reading and writing datasets of tensors in a Lightning
@@ -80,29 +79,27 @@ class Reader(object):
         self.target_db = self._lmdb_env.open_db(TARGET_DB)
         self.metadata_db = self._lmdb_env.open_db(METADATA_DB)
 
-        # Begin transaction
-        self._txn = self._lmdb_env.begin()
-
         # Read metadata
-        # Number of samples in the dataset
-        byte_obj = self._txn.get(NB_SAMPLES, db=self.metadata_db)
-        self.nb_samples = int(decode_bytes(byte_obj))
+        with self._lmdb_env.begin(db=self.metadata_db) as txn:
+            # Number of samples in the dataset
+            byte_obj = txn.get(NB_SAMPLES)
+            self.nb_samples = int(decode_bytes(byte_obj))
 
-        # Read data types
-        # Input
-        byte_obj = self._txn.get(INPUT_DTYPE, db=self.metadata_db)
-        self.input_dtype = np.dtype(decode_bytes(byte_obj))
-        # Target
-        byte_obj = self._txn.get(TARGET_DTYPE, db=self.metadata_db)
-        self.target_dtype = np.dtype(decode_bytes(byte_obj))
+            # Read data types
+            # Input
+            byte_obj = txn.get(INPUT_DTYPE)
+            self.input_dtype = np.dtype(decode_bytes(byte_obj))
+            # Target
+            byte_obj = txn.get(TARGET_DTYPE)
+            self.target_dtype = np.dtype(decode_bytes(byte_obj))
 
-        # Read data shapes
-        # Input
-        byte_obj = self._txn.get(INPUT_SHAPE, db=self.metadata_db)
-        self.input_shape = tuple(np.fromstring(byte_obj, dtype=np.uint8))
-        # Target
-        byte_obj = self._txn.get(TARGET_SHAPE, db=self.metadata_db)
-        self.target_shape = tuple(np.fromstring(byte_obj, dtype=np.uint8))
+            # Read data shapes
+            # Input
+            byte_obj = txn.get(INPUT_SHAPE)
+            self.input_shape = tuple(np.fromstring(byte_obj, dtype=np.uint8))
+            # Target
+            byte_obj = txn.get(TARGET_SHAPE)
+            self.target_shape = tuple(np.fromstring(byte_obj, dtype=np.uint8))
 
     def batch_generator(self, batch_size, shuffle=False, endless_mode=True):
         """Return a batch of samples from `input_db` and `target_db`.
@@ -254,12 +251,14 @@ class Reader(object):
         # Convert `i` to a string with trailing zeros
         key = '{:010}'.format(i)
 
-        if is_inputs:
-            byte_obj = self._txn.get(encode_str(key), db=self.input_db)
-            array = np.fromstring(byte_obj, dtype=self.input_dtype)
-        else:
-            byte_obj = self._txn.get(encode_str(key), db=self.target_db)
-            array = np.fromstring(byte_obj, dtype=self.target_dtype)
+        # Read data
+        with self._lmdb_env.begin() as txn:
+            if is_inputs:
+                byte_obj = txn.get(encode_str(key), db=self.input_db)
+                array = np.fromstring(byte_obj, dtype=self.input_dtype)
+            else:
+                byte_obj = txn.get(encode_str(key), db=self.target_db)
+                array = np.fromstring(byte_obj, dtype=self.target_dtype)
 
         return np.copy(array)
 
@@ -318,24 +317,20 @@ class Writer(object):
         self.metadata_db = self._lmdb_env.open_db(METADATA_DB)
 
         # Write the metadata we already have to `metadata_db`
-        with self._lmdb_env.begin(write=True) as txn:
+        with self._lmdb_env.begin(write=True, db=self.metadata_db) as txn:
             # Data types
             # Input
-            txn.put(INPUT_DTYPE, encode_str(self.input_dtype.str),
-                    db=self.metadata_db)
+            txn.put(INPUT_DTYPE, encode_str(self.input_dtype.str))
             # Target
-            txn.put(TARGET_DTYPE, encode_str(self.target_dtype.str),
-                    db=self.metadata_db)
+            txn.put(TARGET_DTYPE, encode_str(self.target_dtype.str))
 
             # Data shapes
             # Input
             txn.put(INPUT_SHAPE, self._pack_array(np.array(input_shape),
-                                                  is_data=False),
-                    db=self.metadata_db)
+                                                  is_data=False))
             # Target
             txn.put(TARGET_SHAPE, self._pack_array(np.array(target_shape),
-                                                   is_data=False),
-                    db=self.metadata_db)
+                                                   is_data=False))
 
     def put_samples(self, inputs, targets):
         """Puts the inputs and targets into the `input_db` and `target_db`,
@@ -417,8 +412,7 @@ class Writer(object):
 
         Invalidates any open iterators, cursors, and transactions.
         """
-        with self._lmdb_env.begin(write=True) as txn:
-            txn.put(NB_SAMPLES, encode_str(self.nb_samples),
-                    db=self.metadata_db)
+        with self._lmdb_env.begin(write=True, db=self.metadata_db) as txn:
+            txn.put(NB_SAMPLES, encode_str(self.nb_samples))
 
         self._lmdb_env.close()
