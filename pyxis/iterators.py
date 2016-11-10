@@ -10,6 +10,7 @@ __all__ = [
     "Iterator",
     "SimpleBatchIterator",
     "StochasticBatchIterator",
+    "SequentialBatchIterator",
 ]
 
 
@@ -86,6 +87,30 @@ class StochasticBatchIterator(Iterator):
         self.batch_gen = db_reader.stochastic_batch_generator(
             batch_size=batch_size)
         super(StochasticBatchIterator, self).__init__()
+
+    def __next__(self):
+        with self.lock:
+            X, y = next(self.batch_gen)
+
+        return X, y
+
+
+class SequentialBatchIterator(Iterator):
+    """A rudimentary batch iterator that wraps the
+    ``stochastic_batch_generator`` method.
+
+    Parameters
+    ----------
+    db_reader : ``pyxis.Reader``
+        A ``pyxis.Reader`` object which is used to access a LMDB.
+    batch_size : int
+        Number of samples that should make up a batch.
+    """
+
+    def __init__(self, db_reader, batch_size):
+        self.batch_gen = db_reader.stochastic_batch_generator(
+            batch_size=batch_size)
+        super(SequentialBatchIterator, self).__init__()
 
     def __next__(self):
         with self.lock:

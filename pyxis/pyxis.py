@@ -199,6 +199,59 @@ class Reader(object):
 
             yield xs, ys
 
+
+    def sequential_batch_generator(self, batch_size,endless_mode=True):
+        """Return a sequencial batch of data from `input_db` and
+        `target_db`.
+
+        Parameters
+        batch_size : int
+            Number of samples that should make up a batch.
+
+        endless_mode : boolean
+            Indicates whether or not the batch generator should yield the whole
+            dataset only once (`False`) or until the user stops using the
+            function (`True`). `Default is `True`.
+
+        Returns
+        -------
+        (numpy.array, numpy.array)
+            The batch generator returns two values packed in a tuple. The
+            first is a batch of inputs and the second is a batch of targets.
+            """
+        # Keep track of whether or not this is the end of the dataset
+        self.end_of_dataset = False
+
+
+        # Compute how many calls it will take to go through the whole dataset
+        nb_calls = self.nb_samples / batch_size
+
+        while True:
+            # Generate batches
+            for call in np.arange(np.ceil(nb_calls)):
+                # Check and see if we have enough data to fill a whole batch
+                if call < np.floor(nb_calls):  # Whole batch
+                    size = batch_size
+                    self.end_of_dataset = False
+                else:                          # Remainder
+                    size = self.nb_samples % batch_size
+                    self.end_of_dataset = True
+
+                # Check and see if we have gone through the dataset
+                if call + 1 == np.ceil(nb_calls):
+                    self.end_of_dataset = True
+
+                # Create a batch
+                start = batch_size * (call)
+
+                xs,ys= self._get_arrays(start,size)
+                yield xs, ys
+
+            if not endless_mode:
+                break
+
+
+
     def get_sample(self, i):
         """Return the ith sample from `input_db` and `target_db`.
 
@@ -261,6 +314,46 @@ class Reader(object):
                 array = np.fromstring(byte_obj, dtype=self.target_dtype)
 
         return np.copy(array)
+
+    def _get_arrays(self, start, size):
+        """Returns the sequential attay from both `input_db` or `target_db`.
+
+        Parameters
+        ----------
+        start : int
+        size : int
+        """
+        if start+size-1 >= self.nb_samples:
+            raise ValueError('The selected sample number `i` is larger than '
+                             'the number of samples in the database: %d' % i)
+
+
+        xs = np.zeros((size,) + self.input_shape, dtype=self.input_dtype)
+        ys = np.zeros((size,) + self.target_shape, dtype=self.target_dtype)
+
+        with self._lmdb_env.begin() as txn:
+            position=0
+            for i in np.arange(start,start+size, dtype= np.uint64):
+                # Convert `i` to a string with trailing zeros
+                key = '{:010}'.format(i)
+                # Read data
+                byte_obj = txn.get(encode_str(key), db=self.input_db)
+                data = np.fromstring(byte_obj, dtype=self.input_dtype)
+                xs[position] = np.copy(np.reshape(data, self.input_shape))
+                position= position+1
+
+            position=0
+            for i in np.arange(start,start+size, dtype= np.uint64):
+                # Convert `i` to a string with trailing zeros
+                key = '{:010}'.format(i)
+                byte_obj = txn.get(encode_str(key), db=self.target_db)
+                data= np.fromstring(byte_obj, dtype=self.target_dtype)
+                ys[position] = np.copy(np.reshape(data, self.target_shape))
+
+                position= position+1
+
+        return xs,ys
+
 
     def close(self):
         """Close the environment.
