@@ -23,14 +23,13 @@ def encode_str(string, encoding='utf-8', errors='strict'):
     encoding : string
         Default is `utf-8`.
     errors : string
-        Specifies how encoding errors should be handled. Default is
-        `strict`.
+        Specifies how encoding errors should be handled. Default is `strict`.
     """
     return str(string).encode(encoding=encoding, errors=errors)
 
 
 def decode_bytes(byte_obj, encoding='utf-8', errors='strict'):
-    """Decodes the input byte object to a string.
+    """Decode the input byte object to a string.
 
     Parameter
     ---------
@@ -38,31 +37,31 @@ def decode_bytes(byte_obj, encoding='utf-8', errors='strict'):
     encoding : string
         Default is `utf-8`.
     errors : string
-        Specifies how encoding errors should be handled. Default is
-        `strict`.
+        Specifies how encoding errors should be handled. Default is `strict`.
     """
     return byte_obj.decode(encoding=encoding, errors=errors)
 
 
 # Three databases: (i) inputs, (ii) targets, and (iii) metadata
-NB_DBS       = 3
+NB_DBS = 3
 
 # Name of the three databases
-INPUT_DB     = encode_str('INPUT_DB')
-TARGET_DB    = encode_str('TARGET_DB')
-METADATA_DB  = encode_str('METADATA_DB')
+INPUT_DB = encode_str('INPUT_DB')
+TARGET_DB = encode_str('TARGET_DB')
+METADATA_DB = encode_str('METADATA_DB')
 
 # Keys for the metadata
-NB_SAMPLES   = encode_str('NB_SAMPLES')
-INPUT_DTYPE  = encode_str('INPUT_DTYPE')
+NB_SAMPLES = encode_str('NB_SAMPLES')
+INPUT_DTYPE = encode_str('INPUT_DTYPE')
 TARGET_DTYPE = encode_str('TARGET_DTYPE')
-INPUT_SHAPE  = encode_str('INPUT_SHAPE')
+INPUT_SHAPE = encode_str('INPUT_SHAPE')
 TARGET_SHAPE = encode_str('TARGET_SHAPE')
 
 
 class Reader(object):
-    """Object for reading a dataset of tensors in a Lightning Memory-Mapped
-    Database (LMDB).
+    """Object for reading a dataset of tensors.
+
+    The tensors are read from a Lightning Memory-Mapped Database (LMDB).
 
     Parameter
     ---------
@@ -96,10 +95,10 @@ class Reader(object):
             # Read data shapes
             # Input
             byte_obj = txn.get(INPUT_SHAPE)
-            self.input_shape = tuple(np.fromstring(byte_obj, dtype=np.uint8))
+            self.input_shape = tuple(np.fromstring(byte_obj, dtype=np.uint64))
             # Target
             byte_obj = txn.get(TARGET_SHAPE)
-            self.target_shape = tuple(np.fromstring(byte_obj, dtype=np.uint8))
+            self.target_shape = tuple(np.fromstring(byte_obj, dtype=np.uint64))
 
     def batch_generator(self, batch_size, shuffle=False, endless_mode=True):
         """Return a batch of samples from `input_db` and `target_db`.
@@ -170,8 +169,9 @@ class Reader(object):
                 break
 
     def stochastic_batch_generator(self, batch_size):
-        """Return a batch of samples uniformly sampled from `input_db` and
-        `target_db`.
+        """Return a batch of stochastically sampled data samples.
+
+        The data samples are uniformly sampled from `input_db` and `target_db`.
 
         Parameters
         ----------
@@ -199,15 +199,13 @@ class Reader(object):
 
             yield xs, ys
 
-
-    def sequential_batch_generator(self, batch_size,endless_mode=True):
-        """Return a sequencial batch of data from `input_db` and
-        `target_db`.
+    def sequential_batch_generator(self, batch_size, endless_mode=True):
+        """Return a sequential batch of data from `input_db` and `target_db`.
 
         Parameters
+        ----------
         batch_size : int
             Number of samples that should make up a batch.
-
         endless_mode : boolean
             Indicates whether or not the batch generator should yield the whole
             dataset only once (`False`) or until the user stops using the
@@ -218,10 +216,9 @@ class Reader(object):
         (numpy.array, numpy.array)
             The batch generator returns two values packed in a tuple. The
             first is a batch of inputs and the second is a batch of targets.
-            """
+        """
         # Keep track of whether or not this is the end of the dataset
         self.end_of_dataset = False
-
 
         # Compute how many calls it will take to go through the whole dataset
         nb_calls = self.nb_samples / batch_size
@@ -244,13 +241,11 @@ class Reader(object):
                 # Create a batch
                 start = batch_size * (call)
 
-                xs,ys= self._get_arrays(start,size)
+                xs, ys = self._get_arrays(start, size)
                 yield xs, ys
 
             if not endless_mode:
                 break
-
-
 
     def get_sample(self, i):
         """Return the ith sample from `input_db` and `target_db`.
@@ -288,14 +283,14 @@ class Reader(object):
         return np.reshape(_target, self.target_shape)
 
     def _get_array(self, i, is_inputs=True):
-        """Returns the ith array from either `input_db` or `target_db`.
+        """Return the ith array from either `input_db` or `target_db`.
 
         Parameters
         ----------
         i : int
         is_inputs : bool
-            When set to `True` the `input_db` is used, otherwise the `target_db`
-            is used instead. Default is `True`.
+            When set to `True` the `input_db` is used, otherwise the
+            `target_db` is used instead. Default is `True`.
         """
         if i >= self.nb_samples:
             raise ValueError('The selected sample number `i` is larger than '
@@ -316,44 +311,41 @@ class Reader(object):
         return np.copy(array)
 
     def _get_arrays(self, start, size):
-        """Returns the sequential attay from both `input_db` or `target_db`.
+        """Return the sequential array from both `input_db` or `target_db`.
 
         Parameters
         ----------
         start : int
         size : int
         """
-        if start+size-1 >= self.nb_samples:
-            raise ValueError('The selected sample number `i` is larger than '
-                             'the number of samples in the database: %d' % i)
-
+        if start + size - 1 >= self.nb_samples:
+            raise ValueError('The selected sample number is larger than the '
+                             'number of samples in the database: %d' % start)
 
         xs = np.zeros((size,) + self.input_shape, dtype=self.input_dtype)
         ys = np.zeros((size,) + self.target_shape, dtype=self.target_dtype)
 
         with self._lmdb_env.begin() as txn:
-            position=0
-            for i in np.arange(start,start+size, dtype= np.uint64):
+            position = 0
+            for i in np.arange(start, start + size, dtype=np.uint64):
                 # Convert `i` to a string with trailing zeros
                 key = '{:010}'.format(i)
                 # Read data
                 byte_obj = txn.get(encode_str(key), db=self.input_db)
                 data = np.fromstring(byte_obj, dtype=self.input_dtype)
                 xs[position] = np.copy(np.reshape(data, self.input_shape))
-                position= position+1
+                position = position + 1
 
-            position=0
-            for i in np.arange(start,start+size, dtype= np.uint64):
+            position = 0
+            for i in np.arange(start, start + size, dtype=np.uint64):
                 # Convert `i` to a string with trailing zeros
                 key = '{:010}'.format(i)
                 byte_obj = txn.get(encode_str(key), db=self.target_db)
-                data= np.fromstring(byte_obj, dtype=self.target_dtype)
+                data = np.fromstring(byte_obj, dtype=self.target_dtype)
                 ys[position] = np.copy(np.reshape(data, self.target_shape))
+                position = position + 1
 
-                position= position+1
-
-        return xs,ys
-
+        return xs, ys
 
     def close(self):
         """Close the environment.
@@ -364,8 +356,9 @@ class Reader(object):
 
 
 class Writer(object):
-    """Object for writing a dataset of tensors to a Lightning Memory-Mapped
-    Database (LMDB).
+    """Object for writing a dataset of tensors.
+
+    The tensors are written to a Lightning Memory-Mapped Database (LMDB).
 
     Parameters
     ----------
@@ -426,7 +419,9 @@ class Writer(object):
                                                    is_data=False))
 
     def put_samples(self, inputs, targets):
-        """Puts the inputs and targets into the `input_db` and `target_db`,
+        """Put the inputs and targets into the data LMDBs.
+
+        The inputs and targets are put into the `input_db` and `target_db`,
         respectively.
 
         Parameters
@@ -477,15 +472,15 @@ class Writer(object):
                                  '%s MB, %s' % (self.map_size_limit, e))
 
     def _pack_array(self, array, is_data=True, is_inputs=True):
-        """Returns a flattened byte object version of the incoming array.
+        """Return a flattened byte object version of the incoming array.
 
         Parameter
         ---------
         array : numpy.array
         is_data : bool
             When set to `True` the array will be cast to either `input_dtype`
-            or `target_dtype`, otherwise `numpy.uint8` will be used. Default is
-            `True`.
+            or `target_dtype`, otherwise `numpy.uint64` will be used. Default
+            is `True`.
         is_inputs : bool
             When set to `True` the array will be cast to `input_dtype`,
             otherwise `target_dtype` is used instead. Default is `True`.
@@ -496,12 +491,13 @@ class Writer(object):
             else:
                 arr = array.astype(self.target_dtype)
         else:
-            arr = array.astype(np.uint8)
+            arr = array.astype(np.uint64)
         return arr.flatten().tostring()
 
     def close(self):
-        """Close the environment. Before closing, the number of samples is
-        written to `metadata_db`.
+        """Close the environment.
+
+        Before closing, the number of samples is written to `metadata_db`.
 
         Invalidates any open iterators, cursors, and transactions.
         """
