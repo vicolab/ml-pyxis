@@ -17,8 +17,8 @@ except Exception:
 setup(
     name='ml-pyxis',
     version=version,
-    description='Tool for reading and writing datasets of tensors in a '
-                'Lightning Memory-Mapped Database (LMDB)',
+    description='Tool for reading and writing datasets of tensors with '
+                'MessagePack and Lightning Memory-Mapped Database (LMDB)',
     long_description='\n\n'.join(readme),
     author='Igor Barros Barbosa and Aleksander Rognhaugen',
     author_email='',
@@ -26,5 +26,5 @@ setup(
     license='MIT',
     packages=find_packages(),
     include_package_data=True,
-    install_requires=['lmdb', 'numpy'],
+    install_requires=['lmdb', 'msgpack-python>=0.4.0', 'numpy', 'six'],
 )

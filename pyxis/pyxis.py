@@ -1,12 +1,25 @@
 # -*- coding: utf-8 -*-
 #
-# pyxis.py: Tool for reading and writing datasets of tensors in a Lightning
-#           Memory-Mapped Database (LMDB).
+# pyxis.py: Tool for reading and writing datasets of tensors (`numpy.ndarray`)
+#           with MessagePack and Lightning Memory-Mapped Database (LMDB).
 #
 from __future__ import division
 
-import lmdb
 import numpy as np
+
+try:
+    import lmdb
+except ImportError:
+    raise ImportError('Could not import the LMDB library `lmdb`. Please refer '
+                      'to https://github.com/dw/py-lmdb/ for installation '
+                      'instructions.')
+try:
+    import msgpack
+except ImportError:
+    raise ImportError('Could not import the MessagePack library `msgpack`. '
+                      'Please refer to '
+                      'https://github.com/msgpack/msgpack-python for '
+                      'installation instructions.')
 
 __all__ = [
     "Reader",
@@ -28,40 +41,84 @@ def encode_str(string, encoding='utf-8', errors='strict'):
     return str(string).encode(encoding=encoding, errors=errors)
 
 
-def decode_bytes(byte_obj, encoding='utf-8', errors='strict'):
+def decode_str(obj, encoding='utf-8', errors='strict'):
     """Decode the input byte object to a string.
 
-    Parameter
-    ---------
-    byte_obj : byte object
+    Parameters
+    ----------
+    obj : byte object
     encoding : string
         Default is `utf-8`.
     errors : string
         Specifies how encoding errors should be handled. Default is `strict`.
     """
-    return byte_obj.decode(encoding=encoding, errors=errors)
+    return obj.decode(encoding=encoding, errors=errors)
 
 
-# Three databases: (i) inputs, (ii) targets, and (iii) metadata
-NB_DBS = 3
+# Supported types for serialisation
+TYPES = {'str': 1,
+         'ndarray': 2}
 
-# Name of the three databases
-INPUT_DB = encode_str('INPUT_DB')
-TARGET_DB = encode_str('TARGET_DB')
-METADATA_DB = encode_str('METADATA_DB')
+# Default number of databases
+NB_DBS = 2
 
-# Keys for the metadata
-NB_SAMPLES = encode_str('NB_SAMPLES')
-INPUT_DTYPE = encode_str('INPUT_DTYPE')
-TARGET_DTYPE = encode_str('TARGET_DTYPE')
-INPUT_SHAPE = encode_str('INPUT_SHAPE')
-TARGET_SHAPE = encode_str('TARGET_SHAPE')
+# Name of the default database(s)
+DATA_DB = encode_str('data_db')
+META_DB = encode_str('meta_db')
+
+# Default key(s) for metadata
+NB_SAMPLES = encode_str('nb_samples')
+
+
+def encode_data(obj):
+    """Return a dictionary with information encoding the input data object.
+
+    Parameter
+    ---------
+    obj : data object
+        If the incoming data object is neither a string nor an ordinary NumPy
+        array, then the object will simply be returned as is.
+    """
+    if isinstance(obj, str):
+        return {b'type': TYPES['str'],
+                b'data': encode_str(obj)}
+    elif isinstance(obj, np.ndarray):
+        return {b'type': TYPES['ndarray'],
+                b'dtype': obj.dtype.str,
+                b'shape': obj.shape,
+                b'data': obj.tobytes()}
+    else:
+        # Assume the user know what they are doing
+        return obj
+
+
+def decode_data(obj):
+    """Decode a serialised data object.
+
+    Parameter
+    ---------
+    obj : Python dictionary
+        A dictionary describing a serialised data object.
+    """
+    try:
+        if TYPES['str'] == obj[b'type']:
+            return decode_str(obj[b'data'])
+        elif TYPES['ndarray'] == obj[b'type']:
+            return np.fromstring(obj[b'data'], dtype=np.dtype(
+                obj[b'dtype'])).reshape(obj[b'shape'])
+        else:
+            # Assume the user know what they are doing
+            return obj
+    except KeyError:
+        # Assume the user know what they are doing
+        return obj
 
 
 class Reader(object):
-    """Object for reading a dataset of tensors.
+    """Object for reading a dataset of tensors (`numpy.ndarray`).
 
-    The tensors are read from a Lightning Memory-Mapped Database (LMDB).
+    The tensors are read from a Lightning Memory-Mapped Database (LMDB) with
+    the help of MessagePack.
 
     Parameter
     ---------
@@ -73,279 +130,148 @@ class Reader(object):
         # Open LMDB environment in read-only mode
         self._lmdb_env = lmdb.open(dirpath, readonly=True, max_dbs=NB_DBS)
 
-        # Open the three databases associated with the environment
-        self.input_db = self._lmdb_env.open_db(INPUT_DB)
-        self.target_db = self._lmdb_env.open_db(TARGET_DB)
-        self.metadata_db = self._lmdb_env.open_db(METADATA_DB)
+        # Open the default database(s) associated with the environment
+        self.data_db = self._lmdb_env.open_db(DATA_DB)
+        self.meta_db = self._lmdb_env.open_db(META_DB)
 
-        # Read metadata
-        with self._lmdb_env.begin(db=self.metadata_db) as txn:
-            # Number of samples in the dataset
-            byte_obj = txn.get(NB_SAMPLES)
-            self.nb_samples = int(decode_bytes(byte_obj))
+        # Read the metadata
+        self.nb_samples = int(self.get_meta_str(NB_SAMPLES))
 
-            # Read data types
-            # Input
-            byte_obj = txn.get(INPUT_DTYPE)
-            self.input_dtype = np.dtype(decode_bytes(byte_obj))
-            # Target
-            byte_obj = txn.get(TARGET_DTYPE)
-            self.target_dtype = np.dtype(decode_bytes(byte_obj))
+    def get_meta_str(self, key):
+        """Return the value associated with the input key in as a string.
 
-            # Read data shapes
-            # Input
-            byte_obj = txn.get(INPUT_SHAPE)
-            self.input_shape = tuple(np.fromstring(byte_obj, dtype=np.uint64))
-            # Target
-            byte_obj = txn.get(TARGET_SHAPE)
-            self.target_shape = tuple(np.fromstring(byte_obj, dtype=np.uint64))
+        The value is retrieved from `meta_db`.
 
-    def batch_generator(self, batch_size, shuffle=False, endless_mode=True):
-        """Return a batch of samples from `input_db` and `target_db`.
+        Parameter
+        ---------
+        key : string or bytestring
+        """
+        if isinstance(key, str):
+            _key = encode_str(key)
+        else:
+            _key = key
+
+        with self._lmdb_env.begin(db=self.meta_db) as txn:
+            return decode_str(txn.get(_key))
+
+    def get_data_keys(self, i=0):
+        """Return a list of the keys for the ith sample in `data_db`.
+
+        If all samples contain the same keys, then we only need to check
+        the first sample, hence the `i=0` default value.
+
+        Parameter
+        ---------
+        i : int, optional
+        """
+        return list(self.get_sample(i).keys())
+
+    def get_data_value(self, i, key):
+        """Return the value associated with the input key for the ith sample.
+
+        The value is retrieved from `data_db`.
+
+        Because each sample is stored in a msgpack, we will need to read the
+        whole msgpack before returning the value.
 
         Parameters
         ----------
-        batch_size : int
-            Number of samples that should make up a batch.
-        shuffle : boolean
-            When set to `True` the samples are shuffled before being split
-            up into batches, otherwise the samples er kept in the order they
-            were written. Default is `False`.
-        endless_mode : boolean
-            Indicates whether or not the batch generator should yield the whole
-            dataset only once (`False`) or until the user stops using the
-            function (`True`). `Default is `True`.
-
-        Returns
-        -------
-        (numpy.array, numpy.array)
-            The batch generator returns two values packed in a tuple. The
-            first is a batch of inputs and the second is a batch of targets.
+        i : int
+        key : string
         """
-        # Keep track of whether or not this is the end of the dataset
-        self.end_of_dataset = False
+        try:
+            return self.get_sample(i)[key]
+        except KeyError:
+            raise KeyError('Key does not exist: {}'.format(key))
 
-        # Generate indices for the data
-        idxs = np.arange(self.nb_samples, dtype=np.uint64)
+    def get_data_specification(self, i):
+        """Return the specification of all data objects for the ith sample.
 
-        # Compute how many calls it will take to go through the whole dataset
-        nb_calls = self.nb_samples / batch_size
+        The specification includes the shape and data type. This assumes each
+        data object is a `numpy.ndarray`.
 
-        while True:
-            # Shuffle indices
-            if shuffle:
-                np.random.shuffle(idxs)
-
-            # Generate batches
-            for call in np.arange(np.ceil(nb_calls)):
-                # Check and see if we have enough data to fill a whole batch
-                if call < np.floor(nb_calls):  # Whole batch
-                    size = batch_size
-                    self.end_of_dataset = False
-                else:                          # Remainder
-                    size = self.nb_samples % batch_size
-                    self.end_of_dataset = True
-
-                # Check and see if we have gone through the dataset
-                if call + 1 == np.ceil(nb_calls):
-                    self.end_of_dataset = True
-
-                # Create a batch
-                xs = np.zeros((size,) + self.input_shape,
-                              dtype=self.input_dtype)
-                ys = np.zeros((size,) + self.target_shape,
-                              dtype=self.target_dtype)
-
-                batch_idxs = np.arange(size) + batch_size * call
-                batch_idxs = batch_idxs.astype(np.int)
-
-                for i, v in enumerate(batch_idxs):
-                    xs[i] = self.get_input(idxs[v])
-                    ys[i] = self.get_target(idxs[v])
-
-                yield xs, ys
-
-            if not endless_mode:
-                break
-
-    def stochastic_batch_generator(self, batch_size):
-        """Return a batch of stochastically sampled data samples.
-
-        The data samples are uniformly sampled from `input_db` and `target_db`.
-
-        Parameters
-        ----------
-        batch_size : int
-            Number of samples that should make up a batch.
-
-        Returns
-        -------
-        (numpy.array, numpy.array)
-            The batch generator returns two values packed in a tuple. The
-            first is a batch of inputs and the second is a batch of targets.
+        Parameter
+        ---------
+        i : int
         """
-        xs = np.zeros((batch_size,) + self.input_shape, dtype=self.input_dtype)
-        ys = np.zeros((batch_size,) + self.target_shape,
-                      dtype=self.target_dtype)
+        spec = {}
+        sample = self.get_sample(i)
+        for key in sample.keys():
+            spec[key] = {}
+            try:
+                spec[key]['dtype'] = sample[key].dtype
+                spec[key]['shape'] = sample[key].shape
+            except KeyError:
+                raise KeyError('Key does not exist: {}'.format(key))
 
-        while True:
-            # Randomly sample indices
-            batch_idxs = np.random.randint(self.nb_samples, size=batch_size,
-                                           dtype=np.uint64)
-
-            for i, v in enumerate(batch_idxs):
-                xs[i] = self.get_input(v)
-                ys[i] = self.get_target(v)
-
-            yield xs, ys
-
-    def sequential_batch_generator(self, batch_size, endless_mode=True):
-        """Return a sequential batch of data from `input_db` and `target_db`.
-
-        Parameters
-        ----------
-        batch_size : int
-            Number of samples that should make up a batch.
-        endless_mode : boolean
-            Indicates whether or not the batch generator should yield the whole
-            dataset only once (`False`) or until the user stops using the
-            function (`True`). `Default is `True`.
-
-        Returns
-        -------
-        (numpy.array, numpy.array)
-            The batch generator returns two values packed in a tuple. The
-            first is a batch of inputs and the second is a batch of targets.
-        """
-        # Keep track of whether or not this is the end of the dataset
-        self.end_of_dataset = False
-
-        # Compute how many calls it will take to go through the whole dataset
-        nb_calls = self.nb_samples / batch_size
-
-        while True:
-            # Generate batches
-            for call in np.arange(np.ceil(nb_calls)):
-                # Check and see if we have enough data to fill a whole batch
-                if call < np.floor(nb_calls):  # Whole batch
-                    size = batch_size
-                    self.end_of_dataset = False
-                else:                          # Remainder
-                    size = self.nb_samples % batch_size
-                    self.end_of_dataset = True
-
-                # Check and see if we have gone through the dataset
-                if call + 1 == np.ceil(nb_calls):
-                    self.end_of_dataset = True
-
-                # Create a batch
-                start = batch_size * (call)
-
-                xs, ys = self._get_arrays(start, size)
-                yield xs, ys
-
-            if not endless_mode:
-                break
+        return spec
 
     def get_sample(self, i):
-        """Return the ith sample from `input_db` and `target_db`.
+        """Return the ith sample from `data_db`.
 
         Parameter
         ---------
         i : int
         """
-        x = self.get_input(i)
-        y = self.get_target(i)
-        return x, y
+        if 0 > i or self.nb_samples <= i:
+            raise IndexError('The selected sample number is out of range: %d'
+                             % i)
 
-    def get_input(self, i):
-        """Return the ith input tensor from `input_db`.
+        # Convert the sample number to a string with trailing zeros
+        key = encode_str('{:010}'.format(i))
 
-        The tensor is a `numpy.array` reshaped with respect to `input_shape`.
+        with self._lmdb_env.begin(db=self.data_db) as txn:
+            # Read msgpack from LMDB and decode each value in it
+            obj = msgpack.unpackb(txn.get(key))
+            for k in obj:
+                # Keys are stored as byte objects (hence the `decode_str`)
+                obj[decode_str(k)] = msgpack.unpackb(
+                    obj.pop(k), object_hook=decode_data)
 
-        Parameter
-        ---------
-        i : int
-        """
-        _input = self._get_array(i, is_inputs=True)
-        return np.reshape(_input, self.input_shape)
+        return obj
 
-    def get_target(self, i):
-        """Return the ith label from `target_db`.
+    def get_samples(self, i, size):
+        """Return all consecutive samples from `i` to `i + size`.
 
-        The tensor is a `numpy.array` reshaped with respect to `target_shape`.
-
-        Parameter
-        ---------
-        i : int
-        """
-        _target = self._get_array(i, is_inputs=False)
-        return np.reshape(_target, self.target_shape)
-
-    def _get_array(self, i, is_inputs=True):
-        """Return the ith array from either `input_db` or `target_db`.
+        Assumptions:
+        * Every sample from `i` to `i + size` have the same set of keys.
+        * All data objects in a sample are of the type `numpy.ndarray`.
+        * Values associated with the same key have the same tensor shape and
+          data type.
 
         Parameters
         ----------
         i : int
-        is_inputs : bool
-            When set to `True` the `input_db` is used, otherwise the
-            `target_db` is used instead. Default is `True`.
-        """
-        if i >= self.nb_samples:
-            raise ValueError('The selected sample number `i` is larger than '
-                             'the number of samples in the database: %d' % i)
-
-        # Convert `i` to a string with trailing zeros
-        key = '{:010}'.format(i)
-
-        # Read data
-        with self._lmdb_env.begin() as txn:
-            if is_inputs:
-                byte_obj = txn.get(encode_str(key), db=self.input_db)
-                array = np.fromstring(byte_obj, dtype=self.input_dtype)
-            else:
-                byte_obj = txn.get(encode_str(key), db=self.target_db)
-                array = np.fromstring(byte_obj, dtype=self.target_dtype)
-
-        return np.copy(array)
-
-    def _get_arrays(self, start, size):
-        """Return the sequential array from both `input_db` or `target_db`.
-
-        Parameters
-        ----------
-        start : int
         size : int
         """
-        if start + size - 1 >= self.nb_samples:
-            raise ValueError('The selected sample number is larger than the '
-                             'number of samples in the database: %d' % start)
+        if 0 > i or self.nb_samples <= i + size - 1:
+            raise IndexError('The selected sample number is out of range: %d '
+                             ' to %d (size: %d)' % (i, i + size, size))
 
-        xs = np.zeros((size,) + self.input_shape, dtype=self.input_dtype)
-        ys = np.zeros((size,) + self.target_shape, dtype=self.target_dtype)
+        # The assumptions about the data will be made based on the ith sample
+        samples = {}
+        _sample = self.get_sample(i)
+        for key in _sample:
+            samples[key] = np.zeros((size,) + _sample[key].shape,
+                                    dtype=_sample[key].dtype)
+            samples[key][0] = _sample[key]
 
-        with self._lmdb_env.begin() as txn:
-            position = 0
-            for i in np.arange(start, start + size, dtype=np.uint64):
-                # Convert `i` to a string with trailing zeros
-                key = '{:010}'.format(i)
-                # Read data
-                byte_obj = txn.get(encode_str(key), db=self.input_db)
-                data = np.fromstring(byte_obj, dtype=self.input_dtype)
-                xs[position] = np.copy(np.reshape(data, self.input_shape))
-                position = position + 1
+        with self._lmdb_env.begin(db=self.data_db) as txn:
+            pos = 1  # The first position was filled above
+            for _i in range(i + 1, i + size):
+                # Convert the sample number to a string with trailing zeros
+                key = encode_str('{:010}'.format(_i))
 
-            position = 0
-            for i in np.arange(start, start + size, dtype=np.uint64):
-                # Convert `i` to a string with trailing zeros
-                key = '{:010}'.format(i)
-                byte_obj = txn.get(encode_str(key), db=self.target_db)
-                data = np.fromstring(byte_obj, dtype=self.target_dtype)
-                ys[position] = np.copy(np.reshape(data, self.target_shape))
-                position = position + 1
+                # Read msgpack from LMDB, decode each value in it, and add it
+                # to the set of retrieved samples
+                obj = msgpack.unpackb(txn.get(key))
+                for k in obj:
+                    samples[decode_str(k)][pos] = msgpack.unpackb(
+                        obj[k], object_hook=decode_data)
 
-        return xs, ys
+                pos += 1
+
+        return samples
 
     def close(self):
         """Close the environment.
@@ -356,152 +282,156 @@ class Reader(object):
 
 
 class Writer(object):
-    """Object for writing a dataset of tensors.
+    """Object for writing a dataset of tensors (`numpy.ndarray`).
 
-    The tensors are written to a Lightning Memory-Mapped Database (LMDB).
+    The tensors are written to a Lightning Memory-Mapped Database (LMDB) with
+    the help of MessagePack.
 
     Parameters
     ----------
     dirpath : string
         Path to the directory where the LMDB should be written.
-    input_shape : tuple of ints
-        Shape of an input tensor, e.g. `(254, 254, 3)` for a colour image with
-        254 rows and columns.
-    target_shape : tuple of ints
-        Shape of a target tensor, e.g. `()` for an 1-d array. Default is `()`.
-    input_dtype : `numpy.dtype` or string
-        Data type of the input data. Default is `numpy.uint8`.
-    target_dtype : `numpy.dtype` or string
-        Data type of the target data. Default is `numpy.uint8`.
-    ram_gb_limit : int
-        The maximum size of data (inputs and targets) that can be put on the
-        RAM at the same time. The size of the data input to `put_samples` can
-        not exceed this number. Default is `2` GB.
     map_size_limit : int
-        Map size for LMDB in MB. Default is `1000` MB.
+        Map size for LMDB in MB. Must be big enough to capture all of the data
+        intended to be stored in the LMDB.
+    ram_gb_limit : float
+        The maximum size of the data that be put in RAM at the same time. The
+        size of the data this object tries to write cannot exceed this number.
+        Default is `2` GB.
     """
 
-    def __init__(self, dirpath, input_shape, target_shape=(),
-                 input_dtype=np.uint8, target_dtype=np.uint8, ram_gb_limit=2,
-                 map_size_limit=1000):
-        self.ram_gb_limit = ram_gb_limit
-        self.map_size_limit = int(map_size_limit)
-        self.input_dtype = np.dtype(input_dtype)
-        self.target_dtype = np.dtype(target_dtype)
+    def __init__(self, dirpath, map_size_limit, ram_gb_limit=2):
+        self.map_size_limit = int(map_size_limit)  # Megabytes (MB)
+        self.ram_gb_limit = float(ram_gb_limit)  # Gigabytes (GB)
+        self.keys = []
         self.nb_samples = 0
+
+        # Minor sanity checks
+        if self.map_size_limit <= 0:
+            raise ValueError('The LMDB map size must be positive: '
+                             '{}'.format(self.map_size_limit))
+        if self.ram_gb_limit <= 0:
+            raise ValueError('The RAM limit (GB) per write must be '
+                             'positive: {}'.format(self.ram_gb_limit))
 
         # Convert `map_size_limit` from MB to B
         map_size_limit <<= 20
 
         # Open LMDB environment
-        self._lmdb_env = lmdb.open(dirpath, map_size=map_size_limit,
+        self._lmdb_env = lmdb.open(dirpath,
+                                   map_size=map_size_limit,
                                    max_dbs=NB_DBS)
 
-        # Open the three databases associated with the environment
-        self.input_db = self._lmdb_env.open_db(INPUT_DB)
-        self.target_db = self._lmdb_env.open_db(TARGET_DB)
-        self.metadata_db = self._lmdb_env.open_db(METADATA_DB)
+        # Open the default database(s) associated with the environment
+        self.data_db = self._lmdb_env.open_db(DATA_DB)
+        self.meta_db = self._lmdb_env.open_db(META_DB)
 
-        # Write the metadata we already have to `metadata_db`
-        with self._lmdb_env.begin(write=True, db=self.metadata_db) as txn:
-            # Data types
-            # Input
-            txn.put(INPUT_DTYPE, encode_str(self.input_dtype.str))
-            # Target
-            txn.put(TARGET_DTYPE, encode_str(self.target_dtype.str))
+    def put_samples(self, *args):
+        """Put the incoming argument keys and values in the `data_db` LMDB.
 
-            # Data shapes
-            # Input
-            txn.put(INPUT_SHAPE, self._pack_array(np.array(input_shape),
-                                                  is_data=False))
-            # Target
-            txn.put(TARGET_SHAPE, self._pack_array(np.array(target_shape),
-                                                   is_data=False))
+        The user can input their data in two different ways:
+        * As a Python dictionary:
+            * `put_samples({'key1': value1, 'key2': value2, ...})`
+        * Alternating keys and values:
+            * `put_samples('key1', value1, 'key2', value2, ...)`
 
-    def put_samples(self, inputs, targets):
-        """Put the inputs and targets into the data LMDBs.
+        The function assumes that the first axis in all values represent the
+        sample number. For that reason, a single sample must be prepended with
+        a `numpy.newaxis`.
 
-        The inputs and targets are put into the `input_db` and `target_db`,
-        respectively.
-
-        Parameters
-        ----------
-        inputs : numpy.array
-            A `numpy.array` where the first axis is used to select an input.
-        targets : numpy.array
-            A `numpy.array` where the first axis is used to select a target.
+        Parameter
+        ---------
+        *args: see above
         """
-        # Ensure that a hypothetical RAM can handle the number of samples being
-        # stored
-        gb_in_used = np.uint64(inputs.nbytes) + np.uint64(targets.nbytes)
-        gb_in_used = float(gb_in_used / 10**9)
-        if self.ram_gb_limit < gb_in_used:
-            raise ValueError('The size of the data that are to be stored is '
-                             'bigger than `ram_gb_limit`: '
-                             '%d < %f' % (self.ram_gb_limit, gb_in_used))
+        # Select `*args` style
+        if len(args) == 1 and isinstance(args[0], dict):
+            samples = args[0]
+        else:
+            if not len(args) % 2 == 0:
+                raise ValueError('Each data object must be associated with a '
+                                 'key, e.g. `put_samples(key1, value1, key2, '
+                                 'value2, ...)`')
+            # Convert to `{key1: value1, key2: value2, ...}` format
+            samples = dict((a, b) for a, b in zip(args[0::2], args[1::2]))
 
-        # Ensure that the number of inputs and targets are equal
-        if inputs.shape[0] != targets.shape[0]:
-            raise ValueError('The number of inputs must equal the number of '
-                             'targets: %d inputs vs. %d '
-                             'targets' % (inputs.shape[0], targets.shape[0]))
+        # Sanity checks #
+        gb_required = 0
+        nb_elems = []
+        for key in samples:
+            # All data objects must have the type: `numpy.ndarray`
+            if not isinstance(samples[key], np.ndarray):
+                raise ValueError('Data object type not supported: '
+                                 '`numpy.ndarray` != %s' % type(samples[key]))
+            else:
+                gb_required += np.uint64(samples[key].nbytes)
+                nb_elems.append(samples[key].shape[0])
+
+        # Ensure that the hypothetical RAM size specified by the user can
+        # handle the number of samples being stored
+        gb_required = float(gb_required / 10**9)
+        if self.ram_gb_limit < gb_required:
+            raise ValueError('The size of the data being written is larger '
+                             'than `ram_gb_limit`: %d < %f'
+                             % (self.ram_gb_limit, gb_required))
+
+        # The number of data elements must be the same over all data objects
+        if len(nb_elems) != nb_elems.count(nb_elems[0]):
+            raise ValueError('The number of data elements must be the same '
+                             'over all data objects.')
 
         try:
-            # Attempt to write the inputs and targets
-            with self._lmdb_env.begin(write=True) as txn:
-                for i, _input in enumerate(inputs):
-                    # Find associated target
-                    _target = targets[i]
-                    if _target is not np.ndarray:
-                        _target = np.array(_target)
+            # For each sample, build a msgpack and store it in the LMDB
+            with self._lmdb_env.begin(write=True, db=self.data_db) as txn:
+                for i in range(nb_elems[0]):
+                    # Build a msgpack for each data object
+                    msg_pkgs = {}
+                    for key in samples:
+                        # Ensure the current sample is a `numpy.ndarray`
+                        obj = samples[key][i]
+                        if not isinstance(obj, np.ndarray):
+                            obj = np.array(obj)
 
-                    # Key :: sample number as a string with trailing zeros
+                        # Create msgpack
+                        msg_pkgs[key] = msgpack.packb(obj, default=encode_data)
+
+                    # LMDB key: sample number as a string with trailing zeros
                     key = encode_str('{:010}'.format(self.nb_samples))
 
-                    # Put the input in `input_db`
-                    txn.put(key, self._pack_array(_input, is_inputs=True),
-                            db=self.input_db)
-                    # Put the target in `target_db`
-                    txn.put(key, self._pack_array(_target, is_inputs=False),
-                            db=self.target_db)
+                    # Construct final msgpack and store it in the LMDB
+                    pkg = msgpack.packb(msg_pkgs)
+                    txn.put(key, pkg)
 
-                    # Increase sample counter
+                    # Increase global sample counter
                     self.nb_samples += 1
         except lmdb.MapFullError as e:
             raise AttributeError('The LMDB `map_size` is too small: '
                                  '%s MB, %s' % (self.map_size_limit, e))
 
-    def _pack_array(self, array, is_data=True, is_inputs=True):
-        """Return a flattened byte object version of the incoming array.
+        # Write the current number of samples to `meta_db` just in case
+        self.set_meta_str(NB_SAMPLES, self.nb_samples)
 
-        Parameter
-        ---------
-        array : numpy.array
-        is_data : bool
-            When set to `True` the array will be cast to either `input_dtype`
-            or `target_dtype`, otherwise `numpy.uint64` will be used. Default
-            is `True`.
-        is_inputs : bool
-            When set to `True` the array will be cast to `input_dtype`,
-            otherwise `target_dtype` is used instead. Default is `True`.
+    def set_meta_str(self, key, string):
+        """Write the input string to the input key in `meta_db`.
+
+        Parameters
+        ----------
+        key : string or bytestring
+        string : string
         """
-        if is_data:
-            if is_inputs:
-                arr = array.astype(self.input_dtype)
-            else:
-                arr = array.astype(self.target_dtype)
+        if isinstance(key, str):
+            _key = encode_str(key)
         else:
-            arr = array.astype(np.uint64)
-        return arr.flatten().tostring()
+            _key = key
+
+        with self._lmdb_env.begin(write=True, db=self.meta_db) as txn:
+            txn.put(_key, encode_str(string))
 
     def close(self):
         """Close the environment.
 
-        Before closing, the number of samples is written to `metadata_db`.
+        Before closing, the number of samples is written to `meta_db`.
 
         Invalidates any open iterators, cursors, and transactions.
         """
-        with self._lmdb_env.begin(write=True, db=self.metadata_db) as txn:
-            txn.put(NB_SAMPLES, encode_str(self.nb_samples))
-
+        self.set_meta_str(NB_SAMPLES, self.nb_samples)
         self._lmdb_env.close()
