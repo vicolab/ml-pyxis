@@ -29,8 +29,10 @@ Example
 
   # Read
   db = px.Reader(dirpath='data')
-  print(db.get_sample(0))
+  sample = db.get_sample(0)
   db.close()
+
+  print(sample)
 
 .. code-block:: python
 
@@ -58,7 +60,7 @@ The following Python packages are required to use ``ml-pyxis``:
 * `lmdb`_ - Universal Python binding for the `LMDB 'Lightning' Database`_
 * `msgpack-python`_ - `MessagePack`_ implementation for Python (binary serialisation)
 * `NumPy`_ - N-dimensional array object and tools for operating on them
-* `six`_ - A Python 2 and 3 compatibility library.
+* `six`_ - A Python 2 and 3 compatibility library
 
 Please refer to the individual packages for more information about additional
 dependencies and how to install them for your operating system.

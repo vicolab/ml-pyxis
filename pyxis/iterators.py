@@ -61,12 +61,15 @@ class DataIterator(Iterator):
         For example, when using the keys `('a', 'b')` the iterator will return
         `(a_val, b_val)`, where `a_val` and `b_val` are the values associated
         with the keys `'a'` and `'b'`, respectively.
+    rng : `numpy.random` or a :class:`numpy.random.RandomState` instance
+        The random number generator to use. Default is `numpy.random`.
     """
 
-    def __init__(self, db, keys):
+    def __init__(self, db, keys, rng=np.random):
         super(DataIterator, self).__init__()
         self.db = db
         self.keys = keys
+        self.rng = rng
 
         # If there is only one key, wrap it in a list
         if isinstance(self.keys, str):
@@ -100,10 +103,13 @@ class SimpleBatch(DataIterator):
         Indicates whether or not the batch generator should yield the whole
         dataset only once (`False`) or until the user stops using the
         function (`True`). `Default is `True`.
+    rng : `numpy.random` or a :class:`numpy.random.RandomState` instance
+        The random number generator to use. Default is `numpy.random`.
     """
 
-    def __init__(self, db, keys, batch_size, shuffle=False, endless=True):
-        super(SimpleBatch, self).__init__(db, keys)
+    def __init__(self, db, keys, batch_size, shuffle=False, endless=True,
+                 rng=np.random):
+        super(SimpleBatch, self).__init__(db, keys, rng)
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.endless = endless
@@ -138,7 +144,7 @@ class SimpleBatch(DataIterator):
         while True:
             # Shuffle indices
             if self.shuffle:
-                np.random.shuffle(idxs)
+                self.rng.shuffle(idxs)
 
             # Generate batches
             for call in np.arange(np.ceil(nb_calls)):
@@ -201,11 +207,14 @@ class SimpleBatchThreadSafe(SimpleBatch):
         Indicates whether or not the batch generator should yield the whole
         dataset only once (`False`) or until the user stops using the
         function (`True`). `Default is `True`.
+    rng : `numpy.random` or a :class:`numpy.random.RandomState` instance
+        The random number generator to use. Default is `numpy.random`.
     """
 
-    def __init__(self, db, keys, batch_size, shuffle=False, endless=True):
+    def __init__(self, db, keys, batch_size, shuffle=False, endless=True,
+                 rng=np.random):
         super(SimpleBatchThreadSafe, self).__init__(db, keys, batch_size,
-                                                    shuffle, endless)
+                                                    shuffle, endless, rng)
 
     def __next__(self):
         with self.lock:
@@ -232,10 +241,12 @@ class StochasticBatch(DataIterator):
         with the keys `'a'` and `'b'`, respectively.
     batch_size : int
         Number of samples that should make up a batch.
+    rng : `numpy.random` or a :class:`numpy.random.RandomState` instance
+        The random number generator to use. Default is `numpy.random`.
     """
 
-    def __init__(self, db, keys, batch_size):
-        super(StochasticBatch, self).__init__(db, keys)
+    def __init__(self, db, keys, batch_size, rng=np.random):
+        super(StochasticBatch, self).__init__(db, keys, rng)
         self.batch_size = batch_size
 
         # Set up Python generator
@@ -263,9 +274,9 @@ class StochasticBatch(DataIterator):
 
         while True:
             # Sample indices uniformly
-            batch_idxs = np.random.randint(self.db.nb_samples,
-                                           size=self.batch_size,
-                                           dtype=np.uint64)
+            batch_idxs = self.rng.randint(self.db.nb_samples,
+                                          size=self.batch_size,
+                                          dtype=np.uint64)
 
             for i, v in enumerate(batch_idxs):
                 sample = self.db.get_sample(v)
@@ -297,10 +308,13 @@ class StochasticBatchThreadSafe(StochasticBatch):
         with the keys `'a'` and `'b'`, respectively.
     batch_size : int
         Number of samples that should make up a batch.
+    rng : `numpy.random` or a :class:`numpy.random.RandomState` instance
+        The random number generator to use. Default is `numpy.random`.
     """
 
-    def __init__(self, db, keys, batch_size):
-        super(StochasticBatchThreadSafe, self).__init__(db, keys, batch_size)
+    def __init__(self, db, keys, batch_size, rng=np.random):
+        super(StochasticBatchThreadSafe, self).__init__(db, keys, batch_size,
+                                                        rng)
 
     def __next__(self):
         with self.lock:
