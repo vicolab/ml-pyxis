@@ -47,7 +47,7 @@ Installation
 The installation instructions are generic and should work on most operating
 systems that support the prerequisites.
 
-``ml-pyxis`` requires Python version 2.7, 3.4, or above. We recommend
+``ml-pyxis`` requires Python version 2.7, 3.4, or 3.5. We recommend
 installing ``ml-pyxis``, as well as all prerequisites, in a virtual environment via `virtualenv`_.
 
 
