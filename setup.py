@@ -26,5 +26,5 @@ setup(
     license='MIT',
     packages=find_packages(),
     include_package_data=True,
-    install_requires=['lmdb', 'msgpack-python>=0.4.0', 'numpy', 'six'],
+    install_requires=['lmdb', 'msgpack>=0.4.0', 'numpy>=1.9.0', 'six'],
 )
