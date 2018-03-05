@@ -47,8 +47,9 @@ Installation
 The installation instructions are generic and should work on most operating
 systems that support the prerequisites.
 
-``ml-pyxis`` requires Python version 2.7, 3.4, or 3.5. We recommend
-installing ``ml-pyxis``, as well as all prerequisites, in a virtual environment via `virtualenv`_.
+``ml-pyxis`` requires Python version 2.7, 3.4, 3.5, or 3.6. We recommend
+installing ``ml-pyxis``, as well as all prerequisites, in a virtual environment
+via `virtualenv`_.
 
 
 -------------
@@ -58,7 +59,7 @@ Prerequisites
 The following Python packages are required to use ``ml-pyxis``:
 
 * `lmdb`_ - Universal Python binding for the `LMDB 'Lightning' Database`_
-* `msgpack-python`_ - `MessagePack`_ implementation for Python (binary serialisation)
+* `msgpack`_ - `MessagePack`_ implementation for Python (binary serialisation)
 * `NumPy`_ - N-dimensional array object and tools for operating on them
 * `six`_ - A Python 2 and 3 compatibility library
 
@@ -118,7 +119,7 @@ issuing the following command:
 .. _virtualenv: https://virtualenv.pypa.io/en/stable/
 .. _lmdb: http://lmdb.readthedocs.io/en/release/
 .. _LMDB 'Lightning' Database: https://symas.com/products/lightning-memory-mapped-database/
-.. _msgpack-python: https://github.com/msgpack/msgpack-python
+.. _msgpack: https://github.com/msgpack/msgpack-python
 .. _MessagePack: http://msgpack.org/
 .. _NumPy: http://www.numpy.org/
 .. _six: https://github.com/benjaminp/six

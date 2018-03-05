@@ -81,7 +81,7 @@ def encode_data(obj):
     """
     if isinstance(obj, str):
         return {b'type': TYPES['str'],
-                b'data': encode_str(obj)}
+                b'data': obj}
     elif isinstance(obj, np.ndarray):
         return {b'type': TYPES['ndarray'],
                 b'dtype': obj.dtype.str,
@@ -102,7 +102,7 @@ def decode_data(obj):
     """
     try:
         if TYPES['str'] == obj[b'type']:
-            return decode_str(obj[b'data'])
+            return obj[b'data']
         elif TYPES['ndarray'] == obj[b'type']:
             return np.fromstring(obj[b'data'], dtype=np.dtype(
                 obj[b'dtype'])).reshape(obj[b'shape'])
@@ -152,7 +152,11 @@ class Reader(object):
             _key = key
 
         with self._lmdb_env.begin(db=self.meta_db) as txn:
-            return decode_str(txn.get(_key))
+            _k = txn.get(_key)
+            if isinstance(_k, bytes):
+                return decode_str(_k)
+            else:
+                return str(_k)
 
     def get_data_keys(self, i=0):
         """Return a list of the keys for the ith sample in `data_db`.
@@ -220,13 +224,19 @@ class Reader(object):
         # Convert the sample number to a string with trailing zeros
         key = encode_str('{:010}'.format(i))
 
+        obj = {}
         with self._lmdb_env.begin(db=self.data_db) as txn:
             # Read msgpack from LMDB and decode each value in it
-            obj = msgpack.unpackb(txn.get(key))
-            for k in obj:
-                # Keys are stored as byte objects (hence the `decode_str`)
-                obj[decode_str(k)] = msgpack.unpackb(
-                    obj.pop(k), object_hook=decode_data)
+            _obj = msgpack.unpackb(txn.get(key), raw=False, use_list=True)
+            for k in _obj:
+                # Keys must be decoded if they are stored as byte objects
+                if isinstance(k, bytes):
+                    _k = decode_str(k)
+                else:
+                    _k = str(k)
+                obj[_k] = msgpack.unpackb(
+                    _obj[_k], raw=False, use_list=False,
+                    object_hook=decode_data)
 
         return obj
 
@@ -264,10 +274,16 @@ class Reader(object):
 
                 # Read msgpack from LMDB, decode each value in it, and add it
                 # to the set of retrieved samples
-                obj = msgpack.unpackb(txn.get(key))
+                obj = msgpack.unpackb(txn.get(key), raw=False, use_list=True)
                 for k in obj:
-                    samples[decode_str(k)][pos] = msgpack.unpackb(
-                        obj[k], object_hook=decode_data)
+                    # Keys must be decoded if they are stored as byte objects
+                    if isinstance(k, bytes):
+                        _k = decode_str(k)
+                    else:
+                        _k = str(k)
+                    samples[_k][pos] = msgpack.unpackb(
+                        obj[_k], raw=False, use_list=False,
+                        object_hook=decode_data)
 
                 pos += 1
 
@@ -392,13 +408,14 @@ class Writer(object):
                             obj = np.array(obj)
 
                         # Create msgpack
-                        msg_pkgs[key] = msgpack.packb(obj, default=encode_data)
+                        msg_pkgs[key] = msgpack.packb(obj, use_bin_type=True,
+                                                      default=encode_data)
 
                     # LMDB key: sample number as a string with trailing zeros
                     key = encode_str('{:010}'.format(self.nb_samples))
 
                     # Construct final msgpack and store it in the LMDB
-                    pkg = msgpack.packb(msg_pkgs)
+                    pkg = msgpack.packb(msg_pkgs, use_bin_type=True)
                     txn.put(key, pkg)
 
                     # Increase global sample counter

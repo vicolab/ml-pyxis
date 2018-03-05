@@ -6,4 +6,4 @@
 from .pyxis import *
 from .iterators import *
 
-__version__ = "0.2.dev0"
+__version__ = "0.3.dev0"
