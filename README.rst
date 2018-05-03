@@ -29,7 +29,7 @@ Example
 
   # Read
   db = px.Reader(dirpath='data')
-  sample = db.get_sample(0)
+  sample = db[0]
   db.close()
 
   print(sample)

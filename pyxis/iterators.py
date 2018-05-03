@@ -136,10 +136,10 @@ class SimpleBatch(DataIterator):
         self.end_of_dataset = False
 
         # Generate indices for the data
-        idxs = np.arange(self.db.nb_samples, dtype=np.uint64)
+        idxs = np.arange(len(self.db), dtype=np.uint64)
 
         # Compute how many calls it will take to go through the whole dataset
-        nb_calls = self.db.nb_samples / self.batch_size
+        nb_calls = len(self.db) / self.batch_size
 
         while True:
             # Shuffle indices
@@ -153,7 +153,7 @@ class SimpleBatch(DataIterator):
                     size = self.batch_size
                     self.end_of_dataset = False
                 else:                          # Remainder
-                    size = self.db.nb_samples % self.batch_size
+                    size = len(self.db) % self.batch_size
                     self.end_of_dataset = True
 
                 # Check and see if we have gone through the dataset
@@ -170,7 +170,7 @@ class SimpleBatch(DataIterator):
                 batch_idxs = batch_idxs.astype(np.uint64)
 
                 for i, v in enumerate(batch_idxs):
-                    sample = self.db.get_sample(idxs[v])
+                    sample = self.db[idxs[v]]
                     for k in range(nb_keys):
                         data[k][i] = sample[self.keys[k]]
 
@@ -274,12 +274,12 @@ class StochasticBatch(DataIterator):
 
         while True:
             # Sample indices uniformly
-            batch_idxs = self.rng.randint(self.db.nb_samples,
+            batch_idxs = self.rng.randint(len(self.db),
                                           size=self.batch_size,
                                           dtype=np.uint64)
 
             for i, v in enumerate(batch_idxs):
-                sample = self.db.get_sample(v)
+                sample = self.db[int(v)]
                 for k in range(nb_keys):
                     data[k][i] = sample[self.keys[k]]
 
@@ -374,7 +374,7 @@ class SequentialBatch(DataIterator):
         self.end_of_dataset = False
 
         # Compute how many calls it will take to go through the whole dataset
-        nb_calls = self.db.nb_samples / self.batch_size
+        nb_calls = len(self.db) / self.batch_size
 
         data = []
         for key in self.keys:
@@ -389,7 +389,7 @@ class SequentialBatch(DataIterator):
                     size = self.batch_size
                     self.end_of_dataset = False
                 else:                          # Remainder
-                    size = self.db.nb_samples % self.batch_size
+                    size = len(self.db) % self.batch_size
                     self.end_of_dataset = True
 
                 # Check and see if we have gone through the dataset

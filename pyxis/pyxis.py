@@ -168,7 +168,7 @@ class Reader(object):
         ---------
         i : int, optional
         """
-        return list(self.get_sample(i).keys())
+        return list(self[i].keys())
 
     def get_data_value(self, i, key):
         """Return the value associated with the input key for the ith sample.
@@ -184,7 +184,7 @@ class Reader(object):
         key : string
         """
         try:
-            return self.get_sample(i)[key]
+            return self[i][key]
         except KeyError:
             raise KeyError('Key does not exist: {}'.format(key))
 
@@ -199,7 +199,7 @@ class Reader(object):
         i : int
         """
         spec = {}
-        sample = self.get_sample(i)
+        sample = self[i]
         for key in sample.keys():
             spec[key] = {}
             try:
@@ -260,7 +260,7 @@ class Reader(object):
 
         # The assumptions about the data will be made based on the ith sample
         samples = {}
-        _sample = self.get_sample(i)
+        _sample = self[i]
         for key in _sample:
             samples[key] = np.zeros((size,) + _sample[key].shape,
                                     dtype=_sample[key].dtype)
@@ -288,6 +288,39 @@ class Reader(object):
                 pos += 1
 
         return samples
+
+    def __getitem__(self, key):
+        """Return sample(s) from `data_db` using `get_sample()`.
+
+        Parameter
+        ---------
+        key : int or slice object
+        """
+        if isinstance(key, (int, np.integer)):
+            _key = int(key)
+            if 0 > _key:
+                _key += len(self)
+            if 0 > _key or len(self) <= _key:
+                raise IndexError('The selected sample is out of range: `{}`'
+                                 .format(key))
+            return self.get_sample(_key)
+        elif isinstance(key, slice):
+            return [self[i] for i in range(*key.indices(len(self)))]
+        else:
+            raise TypeError('Invalid argument type: `{}`'.format(type(key)))
+
+    def __getslice__(self, i, j):
+        """Python 2.* slicing compatibility: delegate to `__getitem__`.
+
+        This method is deprecated by Python, so functionality may vary
+        compared with `__getitem__`. Use with caution.
+        """
+        return self.__getitem__(slice(i, j, None))
+
+    def __len__(self):
+        """Return the number of samples in the dataset.
+        """
+        return self.nb_samples
 
     def close(self):
         """Close the environment.
