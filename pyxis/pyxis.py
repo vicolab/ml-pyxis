@@ -3,7 +3,7 @@
 # pyxis.py: Tool for reading and writing datasets of tensors (`numpy.ndarray`)
 #           with MessagePack and Lightning Memory-Mapped Database (LMDB).
 #
-from __future__ import division
+from __future__ import (division, print_function)
 
 import numpy as np
 
@@ -127,6 +127,8 @@ class Reader(object):
     """
 
     def __init__(self, dirpath):
+        self.dirpath = dirpath
+
         # Open LMDB environment in read-only mode
         self._lmdb_env = lmdb.open(dirpath, readonly=True, max_dbs=NB_DBS)
 
@@ -322,6 +324,23 @@ class Reader(object):
         """
         return self.nb_samples
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.close()
+
+    def __repr__(self):
+        spec = self.get_data_specification(0)
+        out = 'pyxis.{}\n'.format(self.__class__.__name__)
+        out += "Location:\t\t'{}'\n".format(self.dirpath)
+        out += 'Number of samples:\t{}\n'.format(len(self))
+        out += 'Data keys (0th sample):'
+        for key in self.get_data_keys():
+            out += ("\n\t'{}' <- dtype: {}, shape: {}"
+                    .format(key, spec[key]['dtype'], spec[key]['shape']))
+        return out
+
     def close(self):
         """Close the environment.
 
@@ -350,6 +369,7 @@ class Writer(object):
     """
 
     def __init__(self, dirpath, map_size_limit, ram_gb_limit=2):
+        self.dirpath = dirpath
         self.map_size_limit = int(map_size_limit)  # Megabytes (MB)
         self.ram_gb_limit = float(ram_gb_limit)  # Gigabytes (GB)
         self.keys = []
@@ -475,6 +495,19 @@ class Writer(object):
 
         with self._lmdb_env.begin(write=True, db=self.meta_db) as txn:
             txn.put(_key, encode_str(string))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.close()
+
+    def __repr__(self):
+        out = 'pyxis.{}\n'.format(self.__class__.__name__)
+        out += "Location:\t\t'{}'\n".format(self.dirpath)
+        out += 'LMDB map size (MB):\t{}\n'.format(self.map_size_limit)
+        out += 'RAM limit (GB):\t\t{}'.format(self.ram_gb_limit)
+        return out
 
     def close(self):
         """Close the environment.
