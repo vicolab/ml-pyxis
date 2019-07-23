@@ -3,31 +3,32 @@
 # pyxis.py: Tool for reading and writing datasets of tensors (`numpy.ndarray`)
 #           with MessagePack and Lightning Memory-Mapped Database (LMDB).
 #
-from __future__ import (division, print_function)
+from __future__ import division, print_function
 
 import numpy as np
 
 try:
     import lmdb
 except ImportError:
-    raise ImportError('Could not import the LMDB library `lmdb`. Please refer '
-                      'to https://github.com/dw/py-lmdb/ for installation '
-                      'instructions.')
+    raise ImportError(
+        "Could not import the LMDB library `lmdb`. Please refer "
+        "to https://github.com/dw/py-lmdb/ for installation "
+        "instructions."
+    )
 try:
     import msgpack
 except ImportError:
-    raise ImportError('Could not import the MessagePack library `msgpack`. '
-                      'Please refer to '
-                      'https://github.com/msgpack/msgpack-python for '
-                      'installation instructions.')
+    raise ImportError(
+        "Could not import the MessagePack library `msgpack`. "
+        "Please refer to "
+        "https://github.com/msgpack/msgpack-python for "
+        "installation instructions."
+    )
 
-__all__ = [
-    "Reader",
-    "Writer",
-]
+__all__ = ["Reader", "Writer"]
 
 
-def encode_str(string, encoding='utf-8', errors='strict'):
+def encode_str(string, encoding="utf-8", errors="strict"):
     """Return an encoded byte object of the input string.
 
     Parameters
@@ -41,7 +42,7 @@ def encode_str(string, encoding='utf-8', errors='strict'):
     return str(string).encode(encoding=encoding, errors=errors)
 
 
-def decode_str(obj, encoding='utf-8', errors='strict'):
+def decode_str(obj, encoding="utf-8", errors="strict"):
     """Decode the input byte object to a string.
 
     Parameters
@@ -56,18 +57,17 @@ def decode_str(obj, encoding='utf-8', errors='strict'):
 
 
 # Supported types for serialisation
-TYPES = {'str': 1,
-         'ndarray': 2}
+TYPES = {"str": 1, "ndarray": 2}
 
 # Default number of databases
 NB_DBS = 2
 
 # Name of the default database(s)
-DATA_DB = encode_str('data_db')
-META_DB = encode_str('meta_db')
+DATA_DB = encode_str("data_db")
+META_DB = encode_str("meta_db")
 
 # Default key(s) for metadata
-NB_SAMPLES = encode_str('nb_samples')
+NB_SAMPLES = encode_str("nb_samples")
 
 
 def encode_data(obj):
@@ -80,13 +80,14 @@ def encode_data(obj):
         array, then the object will simply be returned as is.
     """
     if isinstance(obj, str):
-        return {b'type': TYPES['str'],
-                b'data': obj}
+        return {b"type": TYPES["str"], b"data": obj}
     elif isinstance(obj, np.ndarray):
-        return {b'type': TYPES['ndarray'],
-                b'dtype': obj.dtype.str,
-                b'shape': obj.shape,
-                b'data': obj.tobytes()}
+        return {
+            b"type": TYPES["ndarray"],
+            b"dtype": obj.dtype.str,
+            b"shape": obj.shape,
+            b"data": obj.tobytes(),
+        }
     else:
         # Assume the user know what they are doing
         return obj
@@ -101,11 +102,10 @@ def decode_data(obj):
         A dictionary describing a serialised data object.
     """
     try:
-        if TYPES['str'] == obj[b'type']:
-            return obj[b'data']
-        elif TYPES['ndarray'] == obj[b'type']:
-            return np.fromstring(obj[b'data'], dtype=np.dtype(
-                obj[b'dtype'])).reshape(obj[b'shape'])
+        if TYPES["str"] == obj[b"type"]:
+            return obj[b"data"]
+        elif TYPES["ndarray"] == obj[b"type"]:
+            return np.fromstring(obj[b"data"], dtype=np.dtype(obj[b"dtype"])).reshape(obj[b"shape"])
         else:
             # Assume the user know what they are doing
             return obj
@@ -124,13 +124,18 @@ class Reader(object):
     ---------
     dirpath : string
         Path to the directory containing the LMDB.
+
+    lock : bool
+        Either to use lock blocking methods on the reader.
+        If False make sure you do not have co-occurent write to the dataset while reading it.
+
     """
 
-    def __init__(self, dirpath):
+    def __init__(self, dirpath, lock=True):
         self.dirpath = dirpath
 
         # Open LMDB environment in read-only mode
-        self._lmdb_env = lmdb.open(dirpath, readonly=True, max_dbs=NB_DBS)
+        self._lmdb_env = lmdb.open(dirpath, readonly=True, max_dbs=NB_DBS, lock=lock)
 
         # Open the default database(s) associated with the environment
         self.data_db = self._lmdb_env.open_db(DATA_DB)
@@ -188,7 +193,7 @@ class Reader(object):
         try:
             return self[i][key]
         except KeyError:
-            raise KeyError('Key does not exist: {}'.format(key))
+            raise KeyError("Key does not exist: {}".format(key))
 
     def get_data_specification(self, i):
         """Return the specification of all data objects for the ith sample.
@@ -205,10 +210,10 @@ class Reader(object):
         for key in sample.keys():
             spec[key] = {}
             try:
-                spec[key]['dtype'] = sample[key].dtype
-                spec[key]['shape'] = sample[key].shape
+                spec[key]["dtype"] = sample[key].dtype
+                spec[key]["shape"] = sample[key].shape
             except KeyError:
-                raise KeyError('Key does not exist: {}'.format(key))
+                raise KeyError("Key does not exist: {}".format(key))
 
         return spec
 
@@ -220,11 +225,10 @@ class Reader(object):
         i : int
         """
         if 0 > i or self.nb_samples <= i:
-            raise IndexError('The selected sample number is out of range: %d'
-                             % i)
+            raise IndexError("The selected sample number is out of range: %d" % i)
 
         # Convert the sample number to a string with trailing zeros
-        key = encode_str('{:010}'.format(i))
+        key = encode_str("{:010}".format(i))
 
         obj = {}
         with self._lmdb_env.begin(db=self.data_db) as txn:
@@ -237,8 +241,8 @@ class Reader(object):
                 else:
                     _k = str(k)
                 obj[_k] = msgpack.unpackb(
-                    _obj[_k], raw=False, use_list=False,
-                    object_hook=decode_data)
+                    _obj[_k], raw=False, use_list=False, object_hook=decode_data
+                )
 
         return obj
 
@@ -257,22 +261,23 @@ class Reader(object):
         size : int
         """
         if 0 > i or self.nb_samples <= i + size - 1:
-            raise IndexError('The selected sample number is out of range: %d '
-                             ' to %d (size: %d)' % (i, i + size, size))
+            raise IndexError(
+                "The selected sample number is out of range: %d "
+                " to %d (size: %d)" % (i, i + size, size)
+            )
 
         # The assumptions about the data will be made based on the ith sample
         samples = {}
         _sample = self[i]
         for key in _sample:
-            samples[key] = np.zeros((size,) + _sample[key].shape,
-                                    dtype=_sample[key].dtype)
+            samples[key] = np.zeros((size,) + _sample[key].shape, dtype=_sample[key].dtype)
             samples[key][0] = _sample[key]
 
         with self._lmdb_env.begin(db=self.data_db) as txn:
             pos = 1  # The first position was filled above
             for _i in range(i + 1, i + size):
                 # Convert the sample number to a string with trailing zeros
-                key = encode_str('{:010}'.format(_i))
+                key = encode_str("{:010}".format(_i))
 
                 # Read msgpack from LMDB, decode each value in it, and add it
                 # to the set of retrieved samples
@@ -284,8 +289,8 @@ class Reader(object):
                     else:
                         _k = str(k)
                     samples[_k][pos] = msgpack.unpackb(
-                        obj[_k], raw=False, use_list=False,
-                        object_hook=decode_data)
+                        obj[_k], raw=False, use_list=False, object_hook=decode_data
+                    )
 
                 pos += 1
 
@@ -303,13 +308,12 @@ class Reader(object):
             if 0 > _key:
                 _key += len(self)
             if 0 > _key or len(self) <= _key:
-                raise IndexError('The selected sample is out of range: `{}`'
-                                 .format(key))
+                raise IndexError("The selected sample is out of range: `{}`".format(key))
             return self.get_sample(_key)
         elif isinstance(key, slice):
             return [self[i] for i in range(*key.indices(len(self)))]
         else:
-            raise TypeError('Invalid argument type: `{}`'.format(type(key)))
+            raise TypeError("Invalid argument type: `{}`".format(type(key)))
 
     def __getslice__(self, i, j):
         """Python 2.* slicing compatibility: delegate to `__getitem__`.
@@ -332,13 +336,14 @@ class Reader(object):
 
     def __repr__(self):
         spec = self.get_data_specification(0)
-        out = 'pyxis.{}\n'.format(self.__class__.__name__)
+        out = "pyxis.{}\n".format(self.__class__.__name__)
         out += "Location:\t\t'{}'\n".format(self.dirpath)
-        out += 'Number of samples:\t{}\n'.format(len(self))
-        out += 'Data keys (0th sample):'
+        out += "Number of samples:\t{}\n".format(len(self))
+        out += "Data keys (0th sample):"
         for key in self.get_data_keys():
-            out += ("\n\t'{}' <- dtype: {}, shape: {}"
-                    .format(key, spec[key]['dtype'], spec[key]['shape']))
+            out += "\n\t'{}' <- dtype: {}, shape: {}".format(
+                key, spec[key]["dtype"], spec[key]["shape"]
+            )
         return out
 
     def close(self):
@@ -377,19 +382,19 @@ class Writer(object):
 
         # Minor sanity checks
         if self.map_size_limit <= 0:
-            raise ValueError('The LMDB map size must be positive: '
-                             '{}'.format(self.map_size_limit))
+            raise ValueError(
+                "The LMDB map size must be positive: " "{}".format(self.map_size_limit)
+            )
         if self.ram_gb_limit <= 0:
-            raise ValueError('The RAM limit (GB) per write must be '
-                             'positive: {}'.format(self.ram_gb_limit))
+            raise ValueError(
+                "The RAM limit (GB) per write must be " "positive: {}".format(self.ram_gb_limit)
+            )
 
         # Convert `map_size_limit` from MB to B
         map_size_limit <<= 20
 
         # Open LMDB environment
-        self._lmdb_env = lmdb.open(dirpath,
-                                   map_size=map_size_limit,
-                                   max_dbs=NB_DBS)
+        self._lmdb_env = lmdb.open(dirpath, map_size=map_size_limit, max_dbs=NB_DBS)
 
         # Open the default database(s) associated with the environment
         self.data_db = self._lmdb_env.open_db(DATA_DB)
@@ -417,9 +422,11 @@ class Writer(object):
             samples = args[0]
         else:
             if not len(args) % 2 == 0:
-                raise ValueError('Each data object must be associated with a '
-                                 'key, e.g. `put_samples(key1, value1, key2, '
-                                 'value2, ...)`')
+                raise ValueError(
+                    "Each data object must be associated with a "
+                    "key, e.g. `put_samples(key1, value1, key2, "
+                    "value2, ...)`"
+                )
             # Convert to `{key1: value1, key2: value2, ...}` format
             samples = dict((a, b) for a, b in zip(args[0::2], args[1::2]))
 
@@ -429,24 +436,27 @@ class Writer(object):
         for key in samples:
             # All data objects must have the type: `numpy.ndarray`
             if not isinstance(samples[key], np.ndarray):
-                raise ValueError('Data object type not supported: '
-                                 '`numpy.ndarray` != %s' % type(samples[key]))
+                raise ValueError(
+                    "Data object type not supported: " "`numpy.ndarray` != %s" % type(samples[key])
+                )
             else:
                 gb_required += np.uint64(samples[key].nbytes)
                 nb_elems.append(samples[key].shape[0])
 
         # Ensure that the hypothetical RAM size specified by the user can
         # handle the number of samples being stored
-        gb_required = float(gb_required / 10**9)
+        gb_required = float(gb_required / 10 ** 9)
         if self.ram_gb_limit < gb_required:
-            raise ValueError('The size of the data being written is larger '
-                             'than `ram_gb_limit`: %d < %f'
-                             % (self.ram_gb_limit, gb_required))
+            raise ValueError(
+                "The size of the data being written is larger "
+                "than `ram_gb_limit`: %d < %f" % (self.ram_gb_limit, gb_required)
+            )
 
         # The number of data elements must be the same over all data objects
         if len(nb_elems) != nb_elems.count(nb_elems[0]):
-            raise ValueError('The number of data elements must be the same '
-                             'over all data objects.')
+            raise ValueError(
+                "The number of data elements must be the same " "over all data objects."
+            )
 
         try:
             # For each sample, build a msgpack and store it in the LMDB
@@ -461,11 +471,10 @@ class Writer(object):
                             obj = np.array(obj)
 
                         # Create msgpack
-                        msg_pkgs[key] = msgpack.packb(obj, use_bin_type=True,
-                                                      default=encode_data)
+                        msg_pkgs[key] = msgpack.packb(obj, use_bin_type=True, default=encode_data)
 
                     # LMDB key: sample number as a string with trailing zeros
-                    key = encode_str('{:010}'.format(self.nb_samples))
+                    key = encode_str("{:010}".format(self.nb_samples))
 
                     # Construct final msgpack and store it in the LMDB
                     pkg = msgpack.packb(msg_pkgs, use_bin_type=True)
@@ -474,8 +483,9 @@ class Writer(object):
                     # Increase global sample counter
                     self.nb_samples += 1
         except lmdb.MapFullError as e:
-            raise AttributeError('The LMDB `map_size` is too small: '
-                                 '%s MB, %s' % (self.map_size_limit, e))
+            raise AttributeError(
+                "The LMDB `map_size` is too small: " "%s MB, %s" % (self.map_size_limit, e)
+            )
 
         # Write the current number of samples to `meta_db` just in case
         self.set_meta_str(NB_SAMPLES, self.nb_samples)
@@ -503,10 +513,10 @@ class Writer(object):
         self.close()
 
     def __repr__(self):
-        out = 'pyxis.{}\n'.format(self.__class__.__name__)
+        out = "pyxis.{}\n".format(self.__class__.__name__)
         out += "Location:\t\t'{}'\n".format(self.dirpath)
-        out += 'LMDB map size (MB):\t{}\n'.format(self.map_size_limit)
-        out += 'RAM limit (GB):\t\t{}'.format(self.ram_gb_limit)
+        out += "LMDB map size (MB):\t{}\n".format(self.map_size_limit)
+        out += "RAM limit (GB):\t\t{}".format(self.ram_gb_limit)
         return out
 
     def close(self):

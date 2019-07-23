@@ -9,13 +9,13 @@ try:
     import torch
     import torch.utils.data
 except ImportError:
-    raise ImportError('Could not import the PyTorch library `torch` or '
-                      '`torch.utils.data`. Please refer to '
-                      'https://pytorch.org/ for installation instructions.')
+    raise ImportError(
+        "Could not import the PyTorch library `torch` or "
+        "`torch.utils.data`. Please refer to "
+        "https://pytorch.org/ for installation instructions."
+    )
 
-__all__ = [
-    "TorchDataset",
-]
+__all__ = ["TorchDataset"]
 
 
 class TorchDataset(torch.utils.data.Dataset):
@@ -28,6 +28,9 @@ class TorchDataset(torch.utils.data.Dataset):
     Please note that all data values are converted to `torch.Tensor` type using
     the `torch.from_numpy` function in `self.__getitem__`.
 
+    It is not safe to use this dataset along with a dataset writer.
+    Make sure you are only reading from the dataset while using the class.
+
     Parameter
     ---------
     dirpath : string
@@ -36,22 +39,17 @@ class TorchDataset(torch.utils.data.Dataset):
 
     def __init__(self, dirpath):
         self.dirpath = dirpath
-
-        with Reader(self.dirpath) as db:
-            self.nb_samples = len(db)
-            self.repr = db.__repr__()
+        self.db = Reader(self.dirpath, lock=False)
 
     def __len__(self):
-        return self.nb_samples
+        return len(self.db)
 
     def __getitem__(self, key):
-        with Reader(self.dirpath) as db:
-            data = db[key]
-
+        data = self.db[key]
         for k in data.keys():
             data[k] = torch.from_numpy(data[k])
 
         return data
 
     def __repr__(self):
-        return self.repr
+        return str(self.db)
