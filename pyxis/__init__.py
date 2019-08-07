@@ -4,6 +4,6 @@
 # Lightning Memory-Mapped Database (LMDB).
 #
 from .pyxis import *
-from .iterators import *
+# from .iterators import *
 
 __version__ = "0.4.dev0"

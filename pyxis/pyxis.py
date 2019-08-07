@@ -29,7 +29,7 @@ def serialise(value):
     return msgpack.packb(obj, use_bin_type=True)
 
 
-def deserialise(value, is_sample):
+def deserialise(value, is_sample=False):
     if not isinstance(value, bytes):
         return value
 
@@ -45,7 +45,7 @@ def deserialise(value, is_sample):
     return obj
 
 
-class AbstractPyxis(abc.ABC):
+class AbstractPyxis(abc.ABC):  # pragma: no cover
     @abc.abstractmethod
     def get(self, i):
         raise NotImplementedError
@@ -150,8 +150,7 @@ class LMDBPyxis(AbstractPyxis):
                 txn.get(LMDBPyxis.METADATA_KEYS["indices"]), is_sample=False
             )
 
-        self._indices_cache = [] if ind is None else ind
-        return self._indices_cache
+        return [] if ind is None else ind
 
     @property
     def empty(self):
@@ -175,13 +174,14 @@ class LMDBPyxis(AbstractPyxis):
     def put(self, *args):
         data = LMDBPyxis._unpack_key_value_from_args(*args)
 
-        # Check types and record shapes
+        # Must be a set of samples, `__len__` must be implemented and cannot be a
+        # dictionary for serialisation reasons: `TypeError`
         n_samples = []
         for k in data:
-            if isinstance(data[k], np.ndarray):
-                n_samples.append(data[k].shape[0])
-            else:
-                raise ValueError(f"Value type not supported: `{type(data[k])}`")
+            if isinstance(data[k], dict):
+                raise TypeError(f"Dictionary data is not supported: `{data[k]}`")
+
+            n_samples.append(len(data[k]))
 
         # The number of elements must be the same over all values
         if len(n_samples) != n_samples.count(n_samples[0]):
@@ -223,6 +223,7 @@ class LMDBPyxis(AbstractPyxis):
     def close(self):
         if self._env is not None:
             self._env.close()
+            self._dbs = {LMDBPyxis.MAIN_DB_KEY: None, LMDBPyxis.METADATA_DB_KEY: None}
             self._env = None
 
     def render(self):
@@ -265,15 +266,13 @@ class LMDBPyxis(AbstractPyxis):
             indices = self.indices
             self.iter_rng.shuffle(indices)
             for key in indices:
-                value = self.get(key)
-                yield value
+                yield self.get(key)
         else:
             self._open(readonly=True, lock=False)
             with self._env.begin(db=self._dbs[LMDBPyxis.MAIN_DB_KEY]) as txn:
                 cursor = txn.cursor()
                 for _, value in cursor.iternext():
-                    value = deserialise(value, is_sample=True)
-                    yield value
+                    yield deserialise(value, is_sample=True)
 
     def __enter__(self):
         return self
