@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
-"""pyxis.py: Tool for reading and writing datasets of tensors (`numpy.ndarray`) with
-MessagePack and Lightning Memory-Mapped Database (LMDB).
+"""Tool for reading and writing datasets of tensors (`numpy.ndarray`) with MessagePack
+and Lightning Memory-Mapped Database (LMDB).
 """
 import abc
 import collections
@@ -47,15 +46,19 @@ def deserialise(value, is_sample=False):
 
 class AbstractPyxis(abc.ABC):  # pragma: no cover
     @abc.abstractmethod
-    def get(self, i):
+    def has(self, i):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def put(self, *args):
+    def get(self, ind):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def replace(self, i, *args):
+    def put(self, ind, *args):
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def delete(self, ind, *args):
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -96,18 +99,24 @@ class LMDBPyxis(AbstractPyxis):
         self.default_map_size *= LMDBPyxis.BYTES_IN_MB
         self.max_map_size *= LMDBPyxis.BYTES_IN_MB
 
+        self.indices_cache = []
+        self._dirty_indices = True
+
         self._env = None
         self._dbs = {LMDBPyxis.MAIN_DB_KEY: None, LMDBPyxis.METADATA_DB_KEY: None}
         self._isdir = os.path.isdir(self.path)
 
         # Touch the LMDB if necessary, but keep it read-only afterwards
-        if not (
-            os.path.isfile(self.path)
-            or os.path.isfile(os.path.join(self.path, f"data.{LMDBPyxis.EXT}"))
-        ):
+        if not self.exists:
             self._setup(readonly=False, lock=True)
 
         self._setup(readonly=True, lock=False)
+
+    @property
+    def exists(self):
+        return os.path.isfile(self.path) or os.path.isfile(
+            os.path.join(self.path, f"data.{LMDBPyxis.EXT}")
+        )
 
     @property
     def is_open(self):
@@ -143,73 +152,115 @@ class LMDBPyxis(AbstractPyxis):
 
     @property
     def indices(self):
-        self._open(readonly=True, lock=False)
+        # Only touch database when necessary
+        if self._dirty_indices:
+            self._open(readonly=True, lock=False)
 
-        with self._env.begin(db=self._dbs[LMDBPyxis.METADATA_DB_KEY]) as txn:
-            ind = deserialise(
-                txn.get(LMDBPyxis.METADATA_KEYS["indices"]), is_sample=False
-            )
+            with self._env.begin(db=self._dbs[LMDBPyxis.METADATA_DB_KEY]) as txn:
+                ind = deserialise(
+                    txn.get(LMDBPyxis.METADATA_KEYS["indices"]), is_sample=False
+                )
 
-        return [] if ind is None else ind
+            self.indices_cache = [] if ind is None else ind
+            self._dirty_indices = False
+
+        return self.indices_cache
 
     @property
     def empty(self):
         return len(self) == 0
 
-    def get(self, i):
+    @staticmethod
+    def is_index(i):
+        if isinstance(i, (int, np.integer)) and i >= 0:
+            return True
+        else:
+            return False
+
+    def has(self, i):
+        if LMDBPyxis.is_index(i):
+            return i in self.indices
+        else:
+            raise IndexError(f"An index must be a non-negative integer: `{i}`")
+
+    def get(self, ind):
         if self.empty:
             raise IndexError("The database is empty")
-        elif not 0 <= i < len(self):
-            raise IndexError(
-                f" The selected sample, `{i}`, is out of bounds. There are "
-                f"`{len(self)}` samples in total. Indices are zero-based"
-            )
 
+        ind = self._verify_ind(ind)
+
+        # Get all elements from database
         self._open(readonly=True, lock=False)
+        objs = []
         with self._env.begin(db=self._dbs[LMDBPyxis.MAIN_DB_KEY]) as txn:
-            obj = deserialise(txn.get(serialise(i)), is_sample=True)
+            for i in ind:
+                objs.append(deserialise(txn.get(serialise(i)), is_sample=True))
 
-        return obj
+        return objs[0] if len(ind) == 0 else objs
 
-    def put(self, *args):
+    def put(self, ind, *args, **kwargs):
+        overwrite = kwargs.get("overwrite", True)
+        ind = [ind] if not isinstance(ind, list) else ind
+        ind = list(set(ind))
         data = LMDBPyxis._unpack_key_value_from_args(*args)
 
-        # Must be a set of samples, `__len__` must be implemented and cannot be a
-        # dictionary for serialisation reasons: `TypeError`
-        n_samples = []
-        for k in data:
-            if isinstance(data[k], dict):
-                raise TypeError(f"Dictionary data is not supported: `{data[k]}`")
+        if len(ind) > 1:
+            n_elem = []
+            # 1. ensure that data can be indexed (`__len__` and `__getitem__`)
+            for k in data:
+                # Dictionaries are currently explicitly not supported
+                if isinstance(data[k], dict):
+                    raise TypeError(f"Dictionary data is not supported: `{data[k]}`")
 
-            n_samples.append(len(data[k]))
+                if not (
+                    hasattr(data[k], "__len__") and hasattr(data[k], "__getitem__")
+                ):
+                    raise TypeError(
+                        f"Object associated with `{k}` does not have `__len__` and "
+                        "`__getitem__` attributes"
+                    )
 
-        # The number of elements must be the same over all values
-        if len(n_samples) != n_samples.count(n_samples[0]):
-            raise ValueError("The number of samples must be the same for all values")
+                n_elem.append(len(data[k]))
 
-        # Create indices
-        start = 0 if len(self.indices) == 0 else sorted(self.indices)[-1] + 1
-        new_indices = list(range(start, start + n_samples[0]))
+            # 2. ensure the same number of elements over all data values
+            if len(n_elem) != n_elem.count(n_elem[0]):
+                raise ValueError(
+                    "The number of elements must be the same for all values"
+                )
 
-        # Insert the data
-        self._put_txn(new_indices, data, db_key=LMDBPyxis.MAIN_DB_KEY, n_samples=True)
+        # Put data in database
+        self._put_txn(ind, data, db_key=LMDBPyxis.MAIN_DB_KEY, overwrite=overwrite)
 
-        # Update the database with the new indices
+        # Update indices in database
+        indices = self.indices
+        indices.extend(ind)
+        indices = list(set(sorted(indices)))
         self._put_txn(
             LMDBPyxis.METADATA_KEYS["indices"],
-            self.indices + new_indices,
+            indices,
             db_key=LMDBPyxis.METADATA_DB_KEY,
-            n_samples=False,
+            overwrite=True,
         )
+        self._dirty_indices = True
 
-    def replace(self, i, *args):
-        data = LMDBPyxis._unpack_key_value_from_args(*args)
+    def delete(self, ind, *args):
+        ind = list(set(self._verify_ind(ind)))
 
-        # Verify that the value to replaced already exists
-        _ = self.get(i)
+        # Delete from database
+        self._del_txn(ind, db_key=LMDBPyxis.MAIN_DB_KEY)
 
-        # Insert the data
-        self._put_txn(i, data, db_key=LMDBPyxis.MAIN_DB_KEY, n_samples=False)
+        # Update indices in database
+        indices = self.indices
+        for i in ind:
+            indices.remove(i)
+
+        self._put_txn(
+            LMDBPyxis.METADATA_KEYS["indices"],
+            indices,
+            db_key=LMDBPyxis.METADATA_DB_KEY,
+            overwrite=True,
+        )
+        self._dirty_indices = True
 
     def batch(self, n=1):
         it = iter(self)
@@ -238,7 +289,7 @@ class LMDBPyxis(AbstractPyxis):
         if isinstance(key, (int, np.integer)):
             i = int(key)
             i += len(self) if i < 0 else 0
-            return self.get(i)
+            return self.get(self.indices[i])
         elif isinstance(key, slice):
             return [self[i] for i in range(*key.indices(len(self)))]
         else:
@@ -254,10 +305,10 @@ class LMDBPyxis(AbstractPyxis):
         if isinstance(key, (int, np.integer)):
             i = int(key)
             i += len(self) if i < 0 else 0
-            self.replace(i, value)
+            self.put(self.indices[i], value)
         elif isinstance(key, slice):
             for i in range(*key.indices(len(self))):
-                self.replace(i, value)
+                self.put(self.indices[i], value)
         else:
             raise TypeError(f"Invalid argument type: `{type(key)}`")
 
@@ -321,19 +372,35 @@ class LMDBPyxis(AbstractPyxis):
 
         return True
 
-    def _put_txn(self, ind, data, db_key, n_samples):
+    def _verify_ind(self, ind):
+        ind = [ind] if not isinstance(ind, list) else ind
+        invalid_ind = list(itertools.compress(ind, [not self.has(i) for i in ind]))
+        if len(invalid_ind) > 0:
+            raise IndexError(
+                f"Non-existent {'indices' if len(invalid_ind) > 1 else 'index'}: "
+                f"`{invalid_ind}`"
+            )
+
+        return ind
+
+    def _put_txn(self, ind, data, db_key, overwrite=True):
         self._open(readonly=False, lock=True)
 
         # Try to write, if map size is recognised as full, attempt to double it
         try:
             with self._env.begin(write=True, db=self._dbs[db_key]) as txn:
-                if n_samples:
-                    for i in range(len(ind)):
-                        txn.put(
-                            serialise(ind[i]), serialise({k: data[k][i] for k in data})
-                        )
+                if isinstance(ind, list):
+                    if len(ind) > 1:
+                        for i in range(len(ind)):
+                            txn.put(
+                                serialise(ind[i]),
+                                serialise({k: data[k][i] for k in data}),
+                                overwrite=overwrite,
+                            )
+                    else:
+                        txn.put(serialise(ind[0]), serialise(data), overwrite=overwrite)
                 else:
-                    txn.put(serialise(ind), serialise(data))
+                    txn.put(serialise(ind), serialise(data), overwrite=overwrite)
         except lmdb.MapFullError:
             # Use NVIDIA DIGITS' method, where the map size is doubled on failure
             # see PR: https://github.com/NVIDIA/DIGITS/pull/209
@@ -349,7 +416,14 @@ class LMDBPyxis(AbstractPyxis):
             self._env.set_mapsize(self.map_size * 2)
 
             # Attempt the write again
-            self._put_txn(ind, data, db_key, n_samples)
+            self._put_txn(ind, data, db_key)
+
+    def _del_txn(self, ind, db_key):
+        self._open(readonly=False, lock=True)
+
+        with self._env.begin(write=True, db=self._dbs[db_key]) as txn:
+            for i in ind:
+                txn.delete(serialise(i))
 
     @staticmethod
     def _unpack_key_value_from_args(*args):
