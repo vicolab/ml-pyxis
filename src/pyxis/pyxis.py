@@ -99,7 +99,7 @@ class LMDBPyxis(AbstractPyxis):
         self.default_map_size *= LMDBPyxis.BYTES_IN_MB
         self.max_map_size *= LMDBPyxis.BYTES_IN_MB
 
-        self.indices_cache = []
+        self._indices = []
         self._dirty_indices = True
 
         self._env = None
@@ -161,10 +161,10 @@ class LMDBPyxis(AbstractPyxis):
                     txn.get(LMDBPyxis.METADATA_KEYS["indices"]), is_sample=False
                 )
 
-            self.indices_cache = [] if ind is None else ind
+            self._indices = [] if ind is None else ind
             self._dirty_indices = False
 
-        return self.indices_cache
+        return self._indices
 
     @property
     def empty(self):
@@ -196,7 +196,7 @@ class LMDBPyxis(AbstractPyxis):
             for i in ind:
                 objs.append(deserialise(txn.get(serialise(i)), is_sample=True))
 
-        return objs[0] if len(ind) == 0 else objs
+        return objs[0] if len(ind) == 1 else objs
 
     def put(self, ind, *args, **kwargs):
         overwrite = kwargs.get("overwrite", True)
@@ -234,7 +234,7 @@ class LMDBPyxis(AbstractPyxis):
         # Update indices in database
         indices = self.indices
         indices.extend(ind)
-        indices = list(set(sorted(indices)))
+        indices = sorted(list(set(indices)))
         self._put_txn(
             LMDBPyxis.METADATA_KEYS["indices"],
             indices,
