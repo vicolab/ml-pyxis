@@ -107,8 +107,7 @@ class SimpleBatch(DataIterator):
         The random number generator to use. Default is `numpy.random`.
     """
 
-    def __init__(self, db, keys, batch_size, shuffle=False, endless=True,
-                 rng=np.random):
+    def __init__(self, db, keys, batch_size, shuffle=False, endless=True, rng=np.random):
         super(SimpleBatch, self).__init__(db, keys, rng)
         self.batch_size = batch_size
         self.shuffle = shuffle
@@ -152,7 +151,7 @@ class SimpleBatch(DataIterator):
                 if call < np.floor(nb_calls):  # Whole batch
                     size = self.batch_size
                     self.end_of_dataset = False
-                else:                          # Remainder
+                else:  # Remainder
                     size = len(self.db) % self.batch_size
                     self.end_of_dataset = True
 
@@ -163,8 +162,9 @@ class SimpleBatch(DataIterator):
                 # Create a batch for each key
                 data = []
                 for key in self.keys:
-                    data.append(np.zeros((size,) + self.spec[key]['shape'],
-                                dtype=self.spec[key]['dtype']))
+                    data.append(
+                        np.zeros((size,) + self.spec[key]["shape"], dtype=self.spec[key]["dtype"])
+                    )
 
                 batch_idxs = np.arange(size) + self.batch_size * call
                 batch_idxs = batch_idxs.astype(np.uint64)
@@ -211,10 +211,8 @@ class SimpleBatchThreadSafe(SimpleBatch):
         The random number generator to use. Default is `numpy.random`.
     """
 
-    def __init__(self, db, keys, batch_size, shuffle=False, endless=True,
-                 rng=np.random):
-        super(SimpleBatchThreadSafe, self).__init__(db, keys, batch_size,
-                                                    shuffle, endless, rng)
+    def __init__(self, db, keys, batch_size, shuffle=False, endless=True, rng=np.random):
+        super(SimpleBatchThreadSafe, self).__init__(db, keys, batch_size, shuffle, endless, rng)
 
     def __next__(self):
         with self.lock:
@@ -269,14 +267,15 @@ class StochasticBatch(DataIterator):
 
         data = []
         for key in self.keys:
-            data.append(np.zeros((self.batch_size,) + self.spec[key]['shape'],
-                        dtype=self.spec[key]['dtype']))
+            data.append(
+                np.zeros(
+                    (self.batch_size,) + self.spec[key]["shape"], dtype=self.spec[key]["dtype"]
+                )
+            )
 
         while True:
             # Sample indices uniformly
-            batch_idxs = self.rng.randint(len(self.db),
-                                          size=self.batch_size,
-                                          dtype=np.uint64)
+            batch_idxs = self.rng.randint(len(self.db), size=self.batch_size, dtype=np.uint64)
 
             for i, v in enumerate(batch_idxs):
                 sample = self.db[int(v)]
@@ -313,8 +312,7 @@ class StochasticBatchThreadSafe(StochasticBatch):
     """
 
     def __init__(self, db, keys, batch_size, rng=np.random):
-        super(StochasticBatchThreadSafe, self).__init__(db, keys, batch_size,
-                                                        rng)
+        super(StochasticBatchThreadSafe, self).__init__(db, keys, batch_size, rng)
 
     def __next__(self):
         with self.lock:
@@ -378,8 +376,11 @@ class SequentialBatch(DataIterator):
 
         data = []
         for key in self.keys:
-            data.append(np.zeros((self.batch_size,) + self.spec[key]['shape'],
-                        dtype=self.spec[key]['dtype']))
+            data.append(
+                np.zeros(
+                    (self.batch_size,) + self.spec[key]["shape"], dtype=self.spec[key]["dtype"]
+                )
+            )
 
         while True:
             # Generate batches
@@ -388,7 +389,7 @@ class SequentialBatch(DataIterator):
                 if call < np.floor(nb_calls):  # Whole batch
                     size = self.batch_size
                     self.end_of_dataset = False
-                else:                          # Remainder
+                else:  # Remainder
                     size = len(self.db) % self.batch_size
                     self.end_of_dataset = True
 
@@ -399,8 +400,9 @@ class SequentialBatch(DataIterator):
                 # Create a batch for each key
                 data = []
                 for key in self.keys:
-                    data.append(np.zeros((size,) + self.spec[key]['shape'],
-                                dtype=self.spec[key]['dtype']))
+                    data.append(
+                        np.zeros((size,) + self.spec[key]["shape"], dtype=self.spec[key]["dtype"])
+                    )
 
                 start_idx = int(self.batch_size * (call))
 
@@ -445,8 +447,7 @@ class SequentialBatchThreadSafe(SequentialBatch):
     """
 
     def __init__(self, db, keys, batch_size, endless=True):
-        super(SequentialBatchThreadSafe, self).__init__(db, keys, batch_size,
-                                                        endless)
+        super(SequentialBatchThreadSafe, self).__init__(db, keys, batch_size, endless)
 
     def __next__(self):
         with self.lock:
