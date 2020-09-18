@@ -156,10 +156,11 @@ class TorchIterator:
             data = next(gen)
             data_ = copy.deepcopy(data)
             try:
-                local_queue.put(data_, block=True, timeout=2)
+                local_queue.put(data_, block=True, timeout=0.1)
             except queue.Full:
                 if exit_signal.is_set():
-                    return
+                    return None
+        return None
 
     def from_pre_fetch_to_device(self):
         "Tansfer from pre_fetcher_queue to device_transfer_queue"
@@ -179,39 +180,44 @@ class TorchIterator:
                     data = data_
                 else:
                     return None
-            # to torch and then to device
-            if isinstance(data, np.ndarray):
-                tensor = torch.from_numpy(data).to(self.device)
-                # divide the by pre_fetcher multiplier
-                for chunk in torch.chunk(tensor, self.multiplier):
-                    self.device_transfer_queue.put(chunk, block=True)
+            if exit_signal.is_set() == False:
+                # to torch and then to device
+                if isinstance(data, np.ndarray):
+                    tensor = torch.from_numpy(data).to(self.device)
+                    # divide the by pre_fetcher multiplier
+                    for chunk in torch.chunk(tensor, self.multiplier):
+                        try:
+                            self.device_transfer_queue.put(chunk, block=True, timeout=0.1)
+                        except queue.Full:
+                            if self.exit.is_set():
+                                return None
 
-            elif isinstance(data, tuple):
-                holder = {}
-                for nb_keys, item in enumerate(data):
-                    # send to device
-                    tensor = torch.from_numpy(item).to(self.device)
-                    for nb_chunks, chunk in enumerate(torch.chunk(tensor, self.multiplier)):
-                        # slice into chunks
-                        holder[(nb_keys, nb_chunks)] = torch.from_numpy(item).to(self.device)
-                nb_keys = nb_keys + 1
-                nb_chunks = nb_chunks + 1
+                elif isinstance(data, tuple):
+                    holder = {}
+                    for nb_keys, item in enumerate(data):
+                        # send to device
+                        tensor = torch.from_numpy(item).to(self.device)
+                        for nb_chunks, chunk in enumerate(torch.chunk(tensor, self.multiplier)):
+                            # slice into chunks
+                            holder[(nb_keys, nb_chunks)] = torch.from_numpy(item).to(self.device)
+                    nb_keys = nb_keys + 1
+                    nb_chunks = nb_chunks + 1
 
-                # post tuple of chunk
-                for chunk in range(nb_chunks):
-                    sample = []
-                    for key in range(nb_keys):
-                        sample.append(holder[key, chunk])
-                    try:
-                        self.device_transfer_queue.put(tuple(sample), block=True, timeout=2)
-                    except queue.Full:
-                        if self.exit.is_set():
-                            return None
-
+                    # post tuple of chunk
+                    for chunk in range(nb_chunks):
+                        sample = []
+                        for key in range(nb_keys):
+                            sample.append(holder[key, chunk])
+                        try:
+                            self.device_transfer_queue.put(tuple(sample), block=True, timeout=0.1)
+                        except queue.Full:
+                            if self.exit.is_set():
+                                return None
+                else:
+                    raise ValueError("Can't process iterator of type" + type(data))
             else:
-                raise ValueError("Can't process iterator of type" + type(data))
-        else:
-            return None
+                return None
+        return None
 
     def __next__(self):
         data = None
