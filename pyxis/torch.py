@@ -155,9 +155,13 @@ class TorchIterator:
         while exit_signal.is_set() == False:
             data = next(gen)
             data_ = copy.deepcopy(data)
-            try:
-                local_queue.put(data_, block=True, timeout=0.1)
-            except queue.Full:
+            retry = True
+            while retry:
+                retry = False
+                try:
+                    local_queue.put(data_, block=True, timeout=1)
+                except queue.Full:
+                    retry = True
                 if exit_signal.is_set():
                     return None
         return None
@@ -170,28 +174,32 @@ class TorchIterator:
             while data is None:
                 if exit_signal.is_set() == False:
                     try:
-                        data_ = self.pre_fetcher_queue.get(block=True, timeout=0.2)
+                        data_ = self.pre_fetcher_queue.get(block=True, timeout=1)
                     except queue.Empty:
                         data_ = None
-                    except Exception as e:  # work on python 3.x
+                    except Exception as exc:
                         if exit_signal.is_set():
                             return
-                        raise (e)
+                        raise exc
                     data = data_
-                else:
-                    return None
+
+            # Post data to device
             if exit_signal.is_set() == False:
-                # to torch and then to device
+                # data is np array
                 if isinstance(data, np.ndarray):
                     tensor = torch.from_numpy(data).to(self.device)
                     # divide the by pre_fetcher multiplier
                     for chunk in torch.chunk(tensor, self.multiplier):
-                        try:
-                            self.device_transfer_queue.put(chunk, block=True, timeout=0.1)
-                        except queue.Full:
+                        retry = True
+                        while retry:
+                            retry = False
+                            try:
+                                self.device_transfer_queue.put(chunk, block=True, timeout=1)
+                            except queue.Full:
+                                retry = True
                             if self.exit.is_set():
                                 return None
-
+                # data is tuple
                 elif isinstance(data, tuple):
                     holder = {}
                     for nb_keys, item in enumerate(data):
@@ -208,11 +216,16 @@ class TorchIterator:
                         sample = []
                         for key in range(nb_keys):
                             sample.append(holder[key, chunk])
-                        try:
-                            self.device_transfer_queue.put(tuple(sample), block=True, timeout=0.1)
-                        except queue.Full:
+                        retry = True
+                        while retry:
+                            retry = False
+                            try:
+                                self.device_transfer_queue.put(tuple(sample), block=True, timeout=1)
+                            except queue.Full:
+                                retry = True
                             if self.exit.is_set():
                                 return None
+
                 else:
                     raise ValueError("Can't process iterator of type" + type(data))
             else:
