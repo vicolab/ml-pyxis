@@ -10,7 +10,6 @@ import threading
 from typing import Tuple
 
 import numpy as np
-
 from .iterators import DataIterator, StochasticBatch
 from .pyxis import Reader
 
@@ -125,7 +124,6 @@ class TorchIterator:
         db.close()
         self.batch_size = batch_size
         self.exit = exit_signal
-        print(self.exit)
         self.batch_counter = 0
         self.processes = []
         self.device_transfer_queue = queue.Queue(maxsize=device_transfer_queue)
@@ -165,12 +163,22 @@ class TorchIterator:
 
     def from_pre_fetch_to_device(self):
         "Tansfer from pre_fetcher_queue to device_transfer_queue"
-        while self.exit.is_set() == False:
+        while exit_signal.is_set() == False:
             # get from  device
-            if not self.exit.is_set():
-                data = self.pre_fetcher_queue.get(block=True)
-            else:
-                return
+            data = None
+            while data is None:
+                if exit_signal.is_set() == False:
+                    try:
+                        data_ = self.pre_fetcher_queue.get(block=True, timeout=0.2)
+                    except queue.Empty:
+                        data_ = None
+                    except Exception as e:  # work on python 3.x
+                        if exit_signal.is_set():
+                            return
+                        raise (e)
+                    data = data_
+                else:
+                    return None
             # to torch and then to device
             if isinstance(data, np.ndarray):
                 tensor = torch.from_numpy(data).to(self.device)
@@ -198,10 +206,12 @@ class TorchIterator:
                         self.device_transfer_queue.put(tuple(sample), block=True, timeout=2)
                     except queue.Full:
                         if self.exit.is_set():
-                            return
+                            return None
 
             else:
                 raise ValueError("Can't process iterator of type" + type(data))
+        else:
+            return None
 
     def __next__(self):
         data = None
@@ -221,13 +231,15 @@ class TorchIterator:
         """Close iterator threads
         """
         self.exit.set()
+        for process in self.processes:
+            process.terminate()
+            if not self.device_transfer_queue.empty():
+                self.device_transfer_queue.get(False)
+        while not self.device_transfer_queue.empty():
+            self.device_transfer_queue.get(False)
+
+        self.device_transfer_queue.task_done()
+        self.pre_fetcher_queue.close()
 
     def __del__(self):
         self.close()
-        for process in self.processes:
-            process.terminate()
-        self.pre_fetcher_queue.close()
-
-        while not self.device_transfer_queue.empty():
-            self.device_transfer_queue.get(False)
-        self.device_transfer_queue.task_done()
