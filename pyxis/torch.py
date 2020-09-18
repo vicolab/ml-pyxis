@@ -64,28 +64,7 @@ class TorchDataset(torch.utils.data.Dataset):
         return str(self.db)
 
 
-class DoneEvent:
-    """Object that carrys a done signal.
-    DoneEvent can be used to signal threads or proccess that somethiing is done.
-    """
-
-    def __init__(self):
-        self._done = False
-
-    @property
-    def done(self):
-        """Propperty getter for done signal
-
-        Returns
-        -------
-        Done signal : bool
-        """
-        return self._done
-
-    @done.setter
-    def done(done, value):
-        "Propperty setter for done signal"
-        self._done = value
+exit_signal = mp.Event()
 
 
 class TorchIterator:
@@ -142,10 +121,11 @@ class TorchIterator:
         db = Reader(dir_path, False)
         self.nb_samples = db.nb_samples
         self.batches_per_epoch = np.ceil(db.nb_samples / batch_size)
+        self.info = db.__repr__()
         db.close()
         self.batch_size = batch_size
-
-        self.status = DoneEvent()
+        self.exit = exit_signal
+        print(self.exit)
         self.batch_counter = 0
         self.processes = []
         self.device_transfer_queue = queue.Queue(maxsize=device_transfer_queue)
@@ -156,13 +136,7 @@ class TorchIterator:
         for _ in range(num_worker):
             p = ctx.Process(
                 target=self.cpu_fetch_batches,
-                args=(
-                    self.pre_fetcher_queue,
-                    dir_path,
-                    keys,
-                    batch_size * self.multiplier,
-                    self.status,
-                ),
+                args=(self.pre_fetcher_queue, dir_path, keys, batch_size * self.multiplier,),
             )
             p.start()
             self.processes.append(p)
@@ -177,22 +151,26 @@ class TorchIterator:
         return self
 
     @staticmethod
-    def cpu_fetch_batches(queue, dir_path, keys, batch_size, status):
+    def cpu_fetch_batches(local_queue, dir_path, keys, batch_size):
         db = Reader(dir_path, False)
         gen = StochasticBatch(db, keys=keys, batch_size=batch_size)
-
-        while status.done == False:
+        while exit_signal.is_set() == False:
             data = next(gen)
             data_ = copy.deepcopy(data)
-            queue.put(data_, block=True)
-            if status.done == True:
-                return
+            try:
+                local_queue.put(data_, block=True, timeout=2)
+            except queue.Full:
+                if exit_signal.is_set():
+                    return
 
     def from_pre_fetch_to_device(self):
         "Tansfer from pre_fetcher_queue to device_transfer_queue"
-        while self.status.done == False:
+        while self.exit.is_set() == False:
             # get from  device
-            data = self.pre_fetcher_queue.get(block=True)
+            if not self.exit.is_set():
+                data = self.pre_fetcher_queue.get(block=True)
+            else:
+                return
             # to torch and then to device
             if isinstance(data, np.ndarray):
                 tensor = torch.from_numpy(data).to(self.device)
@@ -216,15 +194,18 @@ class TorchIterator:
                     sample = []
                     for key in range(nb_keys):
                         sample.append(holder[key, chunk])
-                    self.device_transfer_queue.put(tuple(sample), block=True)
+                    try:
+                        self.device_transfer_queue.put(tuple(sample), block=True, timeout=2)
+                    except queue.Full:
+                        if self.exit.is_set():
+                            return
+
             else:
                 raise ValueError("Can't process iterator of type" + type(data))
-            if self.status.done == True:
-                return
 
     def __next__(self):
         data = None
-        if self.status.done:
+        if self.exit.is_set():
             raise RuntimeError("Processing has finished. (done = True)")
 
         if self.batch_counter < self.batches_per_epoch:
@@ -236,16 +217,17 @@ class TorchIterator:
             raise StopIteration
         return data
 
+    def close(self):
+        """Close iterator threads
+        """
+        self.exit.set()
+
     def __del__(self):
-        self.status.done = True
-        while not self.pre_fetcher_queue.empty():
-            try:
-                self.pre_fetcher_queue.get(False)
-            except Empty:
-                continue
+        self.close()
+        for process in self.processes:
+            process.terminate()
+        self.pre_fetcher_queue.close()
+
         while not self.device_transfer_queue.empty():
-            try:
-                self.device_transfer_queue.get(False)
-            except Empty:
-                continue
+            self.device_transfer_queue.get(False)
         self.device_transfer_queue.task_done()
